@@ -15,6 +15,7 @@ import { loadProjectAgents, listAgents } from "./agent/agents.js";
 import { GraphStore } from "./graph/store.js";
 import { indexProject } from "./graph/indexer.js";
 import { Agent, MODEL } from "./agent/loop.js";
+import { MODEL_HELP, parseModelArgs, saveModel } from "./model.js";
 import { hasClaudeCli, ClaudeSession } from "./agent/claude-cli.js";
 import { serveMcp } from "./mcp/server.js";
 import "./tools/skills.js";
@@ -114,6 +115,32 @@ function startApprovalServer(io: { ask: (q: string, opts?: { force?: boolean }) 
   return { path: sock, close };
 }
 
+/**
+ * `/model [nome|alias] [--global|--session|--once]` (mesma semântica do Hermes). Vale para os dois backends:
+ * `get`/`set` leem e trocam o modelo vivo; `--once` devolve o anterior depois do turno (`restoreOnce`).
+ */
+function modelCommand(get: () => string, set: (m: string) => void, note: string) {
+  let restore: string | null = null;
+  return {
+    restoreOnce: () => { if (restore !== null) { set(restore); restore = null; } },
+    cmd: {
+      desc: "mostra/troca o modelo (--global grava, --once só o próximo turno)",
+      run: async (args: string[]) => {
+        const req = parseModelArgs(args.join(" "));
+        if (req.errors.length) { for (const e of req.errors) ui.warn(e); return; }
+        if (!req.model) { ui.print(`  ${c.soft(get())} ${c.muted(note)}\n  ${c.muted(MODEL_HELP)}`); return; }
+        const old = get();
+        if (req.scope === "once") restore ??= old; // dois --once seguidos devolvem o modelo original, não o intermediário
+        set(req.model);
+        ui.print(`  ${c.muted(old)} → ${c.soft(req.model)}`);
+        if (req.scope === "global") { saveModel(req.model); ui.print(c.muted("    salvo como padrão (~/.brito/config.json)")); }
+        else if (req.scope === "once") ui.print(c.muted("    só no próximo turno"));
+        else { restore = null; ui.print(c.muted("    só nesta sessão")); }
+      },
+    },
+  };
+}
+
 /** `/skills`: lista, revisa propostas pendentes e consolida a biblioteca. Vale para os dois backends. */
 const skillsCommand = (root: string, io: { ask: (q: string, opts?: { force?: boolean }) => Promise<boolean> }, llm: { complete: Complete; model: string }) => ({
   desc: "lista skills; pending | approve <nome> | reject <nome> | consolidate",
@@ -211,6 +238,7 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean) {
     return;
   }
 
+  const modelCmd = modelCommand(() => session.requestedModel || session.model, (m) => { session.requestedModel = m; session.model = m; }, "(assinatura do claude CLI)");
   const unavailable = { desc: "indisponível no modo claude CLI", run: async () => { ui.warn("não está disponível no modo claude CLI"); } };
   const mcpTools = allTools().map((t) => t.name).filter((n) => /^(graph_|skill_)/.test(n) || n === "remember" || n === "recall");
   const backend: ReplBackend = {
@@ -220,11 +248,11 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean) {
     cost: () => (session.costUsd > 0 ? session.costUsd : undefined),
     get ctxWindow() { return session.contextWindow ?? CTX_WINDOW; },
     turn: (text) => session.send(text),
-    afterTurn: () => learn(),
+    afterTurn: async () => { modelCmd.restoreOnce(); await learn(); },
     abort: () => session.abort(),
     reset: () => session.reset(),
     commands: {
-      "/model": { desc: "modelo em uso", run: async () => { ui.print(`  ${c.soft(session.model)} ${c.muted("(definido pelo claude CLI)")}`); } },
+      "/model": modelCmd.cmd,
       "/tools": { desc: "ferramentas do grafo/memória/skills", run: async () => { for (const n of mcpTools) ui.print(`  ${ui.toolLabel(n)}`); } },
       "/index": {
         desc: "reconstrói o grafo do zero",
@@ -298,6 +326,7 @@ program
       return;
     }
 
+    const modelCmd = modelCommand(() => agent.model, (m) => { agent.model = m; }, "(troque com /model; subagentes explore usam BRITO_EXPLORE_MODEL)");
     const backend: ReplBackend = {
       model: () => agent.model,
       contextTokens: () => agent.contextTokens,
@@ -305,11 +334,11 @@ program
       ctxWindow: CTX_WINDOW,
       cost: () => (Number.isFinite(PRICE_IN) && Number.isFinite(PRICE_OUT) ? (agent.usage.input * PRICE_IN + agent.usage.output * PRICE_OUT) / 1e6 : undefined),
       turn,
-      afterTurn: () => learn(),
+      afterTurn: async () => { modelCmd.restoreOnce(); await learn(); },
       reset: () => { agent.messages = []; agent.contextTokens = 0; agent.recentTurns = []; agent.lastTurn = null; },
       onShell: () => { ctx.dirty = true; }, // `!cmd` pode ter mudado o código
       commands: {
-        "/model": { desc: "modelo em uso", run: async () => { ui.print(`  ${c.soft(agent.model)} ${c.muted("(troque com BRITO_MODEL; subagentes explore usam BRITO_EXPLORE_MODEL)")}`); } },
+        "/model": modelCmd.cmd,
         "/tools": { desc: "ferramentas disponíveis", run: async () => { for (const t of allTools()) ui.print(`  ${ui.toolLabel(t.name)}${c.dim(t.dangerous ? "  (pede aprovação)" : "")}`); } },
         "/context": {
           desc: "uso da janela de contexto",

@@ -2,8 +2,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import { toApiTools, execTool, isConcurrent, type ToolContext } from "../tools/registry.js";
 import { estimateTokens, summarizeMiddle, trimOldToolResults } from "./context.js";
 import { ui } from "../ui/ui.js";
+import { initialModel } from "../model.js";
 
-export const MODEL = process.env.BRITO_MODEL ?? "claude-sonnet-5-5";
+export const MODEL = initialModel();
 const COMPACT_AT = Number(process.env.BRITO_COMPACT_TOKENS ?? 120_000);
 
 export interface AgentOptions {
@@ -30,7 +31,8 @@ export class Agent {
   usage = { input: 0, output: 0, cacheRead: 0, steps: 0 };
   /** tamanho do contexto na última requisição (alimenta a barra de status) */
   contextTokens = 0;
-  readonly model: string;
+  /** troca em runtime via `/model`; vale a partir da próxima requisição */
+  model: string;
   lastTurn: TurnRecord | null = null;
   /** últimos turnos (o mais novo por último): o anterior dá contexto a correções do usuário */
   recentTurns: TurnRecord[] = [];
