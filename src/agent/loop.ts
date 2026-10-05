@@ -32,6 +32,8 @@ export class Agent {
   contextTokens = 0;
   readonly model: string;
   lastTurn: TurnRecord | null = null;
+  /** últimos turnos (o mais novo por último): o anterior dá contexto a correções do usuário */
+  recentTurns: TurnRecord[] = [];
   private maxSteps: number;
   private log: (s: string) => void;
 
@@ -62,6 +64,7 @@ export class Agent {
   private async run(userText: string, signal?: AbortSignal): Promise<string> {
     const turn: TurnRecord = { messages: [], toolCalls: 0, errors: 0, finished: false };
     this.lastTurn = turn;
+    this.recentTurns = [...this.recentTurns, turn].slice(-3);
     const push = (m: Anthropic.MessageParam) => { this.messages.push(m); turn.messages.push(m); };
     push({ role: "user", content: userText });
     await this.compactIfNeeded();

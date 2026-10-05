@@ -1,0 +1,217 @@
+{
+  "expect": "create",
+  "note": "procedimento repetível com armadilha descoberta (erro→conserto)",
+  "turn": {
+    "toolCalls": 8,
+    "errors": 2,
+    "finished": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Adicione uma tool nova `git_log` ao agente."
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "1",
+            "name": "graph_search",
+            "input": {
+              "query": "defineTool"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "1",
+            "content": "src/tools/graph.ts:12 defineTool(...)\nsrc/tools/skills.ts:5 defineTool(...)"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "2",
+            "name": "read_file",
+            "input": {
+              "path": "src/tools/skills.ts",
+              "limit": 20
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "2",
+            "content": "import { defineTool } from \"./registry.js\"; defineTool({ name: 'skill_load', ... })"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "3",
+            "name": "write_file",
+            "input": {
+              "path": "src/tools/git.ts",
+              "content": "defineTool({ name: 'git_log', ... })"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "3",
+            "content": "ok"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "4",
+            "name": "bash",
+            "input": {
+              "command": "npm run typecheck"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "4",
+            "content": "src/tools/git.ts(1,1): error TS2304: Cannot find name 'defineTool'.",
+            "is_error": true
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "5",
+            "name": "edit_file",
+            "input": {
+              "path": "src/tools/git.ts",
+              "old": "defineTool({",
+              "new": "import { defineTool } from \"./registry.js\";\ndefineTool({"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "5",
+            "content": "ok"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "6",
+            "name": "bash",
+            "input": {
+              "command": "npm run typecheck"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "6",
+            "content": "ok"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "7",
+            "name": "bash",
+            "input": {
+              "command": "npx tsx src/cli.ts --tools"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "7",
+            "content": "git_log não aparece na lista",
+            "is_error": true
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "8",
+            "name": "edit_file",
+            "input": {
+              "path": "src/tools/index.ts",
+              "old": "import \"./skills.js\";",
+              "new": "import \"./skills.js\";\nimport \"./git.js\";"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "8",
+            "content": "ok — tools só são registradas se o arquivo for importado em src/tools/index.ts"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "git_log criada. Armadilha: toda tool nova precisa ser importada em src/tools/index.ts, senão não é registrada e o typecheck passa mesmo assim."
+          }
+        ]
+      }
+    ]
+  },
+  "expectReflect": true
+}

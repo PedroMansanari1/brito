@@ -1,0 +1,176 @@
+{
+  "expect": "none",
+  "expectReflect": false,
+  "note": "skill carregada estava certa e o agente seguiu sem problemas: nada a melhorar",
+  "existingSkills": [
+    {
+      "name": "add-tool",
+      "description": "Como adicionar uma tool nova ao agente",
+      "body": "## Quando usar\nAo criar uma tool nova.\n\n## Passos\n1. Criar src/tools/<nome>.ts com defineTool.\n2. Importar o arquivo em src/tools/index.ts.\n3. Rodar npm run typecheck e npx tsx src/cli.ts --tools.\n\n## Armadilhas\nSem o import em src/tools/index.ts a tool não é registrada.\n\n## Verificação\nA tool aparece em --tools."
+    }
+  ],
+  "loadedSkills": [
+    "add-tool"
+  ],
+  "turn": {
+    "toolCalls": 6,
+    "errors": 0,
+    "finished": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Crie a tool `git_status`."
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "1",
+            "name": "skill_load",
+            "input": {
+              "name": "add-tool"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "1",
+            "content": "# Skill add-tool ... 3 passos ..."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "2",
+            "name": "write_file",
+            "input": {
+              "path": "src/tools/gitstatus.ts",
+              "content": "import { defineTool } from \"./registry.js\"; defineTool({ name:'git_status' })"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "2",
+            "content": "ok"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "3",
+            "name": "edit_file",
+            "input": {
+              "path": "src/tools/index.ts",
+              "old": "import \"./skills.js\";",
+              "new": "import \"./skills.js\";\nimport \"./gitstatus.js\";"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "3",
+            "content": "ok"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "4",
+            "name": "bash",
+            "input": {
+              "command": "npm run typecheck"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "4",
+            "content": "ok"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "5",
+            "name": "bash",
+            "input": {
+              "command": "npx tsx src/cli.ts --tools"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "5",
+            "content": "git_status\ngraph_search\n..."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "6",
+            "name": "bash",
+            "input": {
+              "command": "git status --short"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "6",
+            "content": "?? src/tools/gitstatus.ts\n M src/tools/index.ts"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "git_status criada seguindo a skill add-tool; aparece em --tools."
+          }
+        ]
+      }
+    ]
+  }
+}

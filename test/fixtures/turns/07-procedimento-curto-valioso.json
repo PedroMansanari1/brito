@@ -1,0 +1,120 @@
+{
+  "expect": "create",
+  "expectReflect": true,
+  "note": "poucas tools, mas armadilha séria e repetível (tipos gerados ficam velhos)",
+  "turn": {
+    "toolCalls": 4,
+    "errors": 1,
+    "finished": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Adicione o campo `phone` ao modelo User."
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "1",
+            "name": "edit_file",
+            "input": {
+              "path": "prisma/schema.prisma",
+              "old": "email String",
+              "new": "email String\n  phone String?"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "1",
+            "content": "ok"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "2",
+            "name": "bash",
+            "input": {
+              "command": "npm run typecheck"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "2",
+            "content": "src/api/user.ts(14,22): error TS2339: Property 'phone' does not exist on type 'User'.",
+            "is_error": true
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "3",
+            "name": "bash",
+            "input": {
+              "command": "npx prisma generate"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "3",
+            "content": "Generated Prisma Client"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "4",
+            "name": "bash",
+            "input": {
+              "command": "npm run typecheck"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "4",
+            "content": "ok"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Feito. Depois de mudar prisma/schema.prisma é preciso rodar `npx prisma generate`; sem isso o typecheck acusa propriedade inexistente."
+          }
+        ]
+      }
+    ]
+  }
+}

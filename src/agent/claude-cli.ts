@@ -6,6 +6,7 @@ import { skillsIndex } from "../skills/store.js";
 import { MCP_NAME, MCP_PREFIX, APPROVE_TOOL } from "../mcp/server.js";
 import { ui } from "../ui/ui.js";
 import { perms } from "../permissions.js";
+import type { TurnRecord } from "./loop.js";
 
 // Backend alternativo: delega ao `claude` oficial, que autentica com o /login do usuário.
 // O brito nunca lê nem envia o token da assinatura. Grafo, memória e skills chegam ao claude via MCP.
@@ -32,6 +33,33 @@ function claudeAgents(): Record<string, unknown> {
   return out;
 }
 
+/**
+ * Acumula um evento do stream-json no TurnRecord que alimenta a reflexão de skills.
+ * Só a thread principal entra: mensagens de subagentes (`parent_tool_use_id`) têm contexto próprio.
+ */
+export function recordStreamEvent(turn: TurnRecord, ev: any, loadedSkills: Set<string>) {
+  if (ev?.parent_tool_use_id) return;
+  if (ev?.type === "assistant") {
+    const rec: any[] = [];
+    for (const b of ev.message?.content ?? []) {
+      if (b.type === "text" && b.text) rec.push({ type: "text", text: b.text });
+      else if (b.type === "tool_use") {
+        const name = String(b.name).replace(MCP_PREFIX, "");
+        rec.push({ type: "tool_use", id: b.id, name, input: b.input });
+        if (name === "skill_load" && typeof b.input?.name === "string") loadedSkills.add(b.input.name);
+      }
+    }
+    if (rec.length) turn.messages.push({ role: "assistant", content: rec });
+  } else if (ev?.type === "user") {
+    const results = (ev.message?.content ?? []).filter((b: any) => b.type === "tool_result")
+      .map((b: any) => ({ type: "tool_result", tool_use_id: b.tool_use_id, content: b.content, is_error: !!b.is_error }));
+    if (!results.length) return;
+    turn.messages.push({ role: "user", content: results });
+    turn.toolCalls += results.length;
+    turn.errors += results.filter((r: any) => r.is_error).length;
+  }
+}
+
 export interface ClaudeBackendOpts {
   root: string;
   /** socket unix onde o REPL atende os pedidos de permissão */
@@ -51,12 +79,17 @@ export class ClaudeSession {
   /** janela real do modelo, informada pelo claude no evento `result` */
   contextWindow?: number;
   costUsd = 0;
+  /** transcript do último turno (thread principal), montado do stream-json para a reflexão de skills */
+  lastTurn: TurnRecord | null = null;
+  recentTurns: TurnRecord[] = [];
+  /** skills carregadas via skill_load (que roda no servidor MCP, outro processo) */
+  readonly loadedSkills = new Set<string>();
   /** último turno em andamento, para o Ctrl+C */
   private child: ReturnType<typeof spawn> | null = null;
 
   constructor(private o: ClaudeBackendOpts) {}
 
-  reset() { this.id = randomUUID(); this.started = false; this.contextTokens = 0; }
+  reset() { this.id = randomUUID(); this.started = false; this.contextTokens = 0; this.recentTurns = []; }
   abort() { this.child?.kill("SIGINT"); }
 
   private args(text: string): string[] {
@@ -90,8 +123,12 @@ export class ClaudeSession {
       const child = (this.child = spawn("claude", this.args(text), { cwd: this.o.root, stdio: ["ignore", "pipe", "pipe"] }));
       let buf = "", stderr = "", ok = true, interrupted = false;
       const names = new Map<string, { name: string; input: unknown }>();
+      const turn: TurnRecord = { messages: [{ role: "user", content: text }], toolCalls: 0, errors: 0, finished: false };
+      this.lastTurn = turn;
+      this.recentTurns = [...this.recentTurns, turn].slice(-3);
 
       const handle = (ev: any) => {
+        recordStreamEvent(turn, ev, this.loadedSkills);
         if (ev.type === "assistant") {
           for (const b of ev.message?.content ?? []) {
             if (b.type === "text" && b.text) { ui.text(b.text); ui.textEnd(); }
@@ -135,6 +172,7 @@ export class ClaudeSession {
         interrupted = signal === "SIGINT" || code === 130;
         if (code !== 0 && !interrupted) { ok = false; if (stderr.trim()) ui.error(stderr.trim().slice(0, 600)); }
         else if (code === 0) this.started = true;
+        turn.finished = ok && !interrupted && code === 0;
         if (interrupted) ui.warn("⏹ interrompido");
         ui.turnEnd(ok && !interrupted);
         resolve(ok);

@@ -1,0 +1,154 @@
+{
+  "expect": "update:add-tool",
+  "note": "skill carregada tinha passo desatualizado; agente teve que corrigir",
+  "existingSkills": [
+    {
+      "name": "add-tool",
+      "description": "Como adicionar uma tool nova ao agente",
+      "body": "## Quando usar\nAo criar uma tool nova.\n\n## Passos\n1. Criar o arquivo em src/tools/<nome>.ts com defineTool.\n2. Rodar npm run typecheck.\n\n## Verificação\nnpm run typecheck"
+    }
+  ],
+  "loadedSkills": [
+    "add-tool"
+  ],
+  "turn": {
+    "toolCalls": 5,
+    "errors": 1,
+    "finished": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Crie a tool `git_diff`."
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "1",
+            "name": "skill_load",
+            "input": {
+              "name": "add-tool"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "1",
+            "content": "# Skill add-tool ... 1. Criar o arquivo em src/tools/<nome>.ts ..."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "2",
+            "name": "write_file",
+            "input": {
+              "path": "src/tools/gitdiff.ts",
+              "content": "import { defineTool } from \"./registry.js\"; defineTool({ name:'git_diff' })"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "2",
+            "content": "ok"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "3",
+            "name": "bash",
+            "input": {
+              "command": "npm run typecheck"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "3",
+            "content": "ok"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "4",
+            "name": "bash",
+            "input": {
+              "command": "npx tsx src/cli.ts --tools"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "4",
+            "content": "git_diff não aparece",
+            "is_error": true
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "5",
+            "name": "edit_file",
+            "input": {
+              "path": "src/tools/index.ts",
+              "old": "import \"./skills.js\";",
+              "new": "import \"./skills.js\";\nimport \"./gitdiff.js\";"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "5",
+            "content": "ok"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Pronto. A skill não cobre o registro em src/tools/index.ts; sem isso a tool não existe em runtime."
+          }
+        ]
+      }
+    ]
+  },
+  "expectReflect": true
+}

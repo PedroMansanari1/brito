@@ -19,8 +19,10 @@ import { hasClaudeCli, ClaudeSession } from "./agent/claude-cli.js";
 import { serveMcp } from "./mcp/server.js";
 import "./tools/skills.js";
 import type { ToolContext } from "./tools/registry.js";
-import { listSkills, skillsIndex } from "./skills/store.js";
-import { reflect, shouldReflect } from "./skills/learn.js";
+import { approvePending, listPending, listSkills, rejectPending, skillsIndex } from "./skills/store.js";
+import { defaultComplete, reflect, shouldReflect, type Complete } from "./skills/learn.js";
+import { claudeCliComplete } from "./skills/learn-cli.js";
+import type { TurnRecord } from "./agent/loop.js";
 import { buildSystemPrompt } from "./agent/prompt.js";
 import { allTools } from "./tools/registry.js";
 import { ui, c, fmtTokens } from "./ui/ui.js";
@@ -111,6 +113,53 @@ function startApprovalServer(io: { ask: (q: string, opts?: { force?: boolean }) 
   return { path: sock, close };
 }
 
+/** `/skills`: lista skills e revisa propostas pendentes. Vale para os dois backends. */
+const skillsCommand = (root: string, io: { ask: (q: string, opts?: { force?: boolean }) => Promise<boolean> }) => ({
+  desc: "lista skills; pending | approve <nome> | reject <nome>",
+  run: async ([sub, name]: string[]) => {
+    if (sub === "approve" || sub === "reject") {
+      if (!name) { ui.warn(`uso: /skills ${sub} <nome>`); return; }
+      try {
+        if (sub === "approve") {
+          const p = listPending(root).find((x) => x.name === name);
+          if (!p) { ui.warn(`sem proposta pendente: ${name}`); return; }
+          ui.print(`  ${c.soft(p.name)} ${c.muted(`(${p.scope}) ${p.description}`)}\n${p.body.split("\n").map((l) => `  │ ${l}`).join("\n")}`);
+          if (!(await io.ask(`aprovar a skill ${name}?`, { force: true }))) { ui.info("mantida como pendente"); return; }
+          const r = approvePending(root, name);
+          ui.print(c.ok("✦ ") + `skill ${name} ativa (${r.scope}, v${r.version})`);
+        } else ui.print(rejectPending(root, name) ? c.ok("✦ ") + `proposta ${name} descartada` : c.muted(`sem proposta pendente: ${name}`));
+      } catch (e: any) { ui.error(e?.message ?? String(e)); }
+      return;
+    }
+    const pending = listPending(root);
+    if (sub === "pending") {
+      if (!pending.length) { ui.info("nenhuma proposta pendente"); return; }
+      for (const p of pending) ui.print(`  ${c.soft(p.name)} ${c.muted(`(${p.scope}) ${p.description}`)}`);
+      return;
+    }
+    for (const s of listSkills(root)) ui.print(`  ${c.soft(s.name)} ${c.muted(`(${s.scope}) v${s.version} · ${s.uses} usos · ${s.description}`)}`);
+    if (pending.length) ui.info(`${pending.length} proposta(s) pendente(s): /skills pending`);
+  },
+});
+
+/** Reflexão pós-turno que propõe skills (gatilho automático ou `/learn`). Independe do backend: só muda a origem do turno e o modelo. */
+function makeLearner(getTurns: () => TurnRecord[], ctx: ToolContext, complete: Complete, model: string) {
+  return async (force = false) => {
+    const turns = getTurns();
+    const turn = turns[turns.length - 1] ?? null;
+    if (!force && !shouldReflect(turn, ctx)) { ctx.loadedSkills?.clear(); return; }
+    if (!turn) { ui.info("Nada para refletir ainda."); return; }
+    ui.info("✦ refletindo sobre a tarefa para extrair skills…");
+    ui.turnStart();
+    try {
+      const notes = await reflect(turn, ctx, model, complete, turns[turns.length - 2]);
+      ui.turnEnd(false);
+      for (const n of notes) ui.print(c.ok("✦ ") + n);
+      if (!notes.length) ui.info("✦ nenhuma skill nova");
+    } catch (e: any) { ui.turnEnd(false); ui.error(`reflexão falhou: ${e?.message ?? e}`); }
+  };
+}
+
 async function runViaClaude(root: string, promptParts: string[], yes: boolean) {
   const startedAt = Date.now();
   if (yes) perms.mode = "bypass";
@@ -131,9 +180,13 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean) {
   });
   loadProjectAgents(root);
 
+  // O grafo já foi solto para o servidor MCP; skill_save só usa o store de skills, então `graph` não é tocado.
+  const learnCtx: ToolContext = { root, graph: undefined as unknown as GraphStore, ask: (q, opts) => io.ask(q, opts), sync: async () => {}, dirty: false, loadedSkills: session.loadedSkills };
+  const learn = makeLearner(() => session.recentTurns, learnCtx, claudeCliComplete, process.env.BRITO_LEARN_MODEL ?? ""); // "" = modelo padrão do claude
+
   if (promptParts.length) {
     const ok = await session.send(promptParts.join(" "));
-    if (!ok) process.exitCode = 1;
+    if (ok) await learn(); else process.exitCode = 1;
     return;
   }
 
@@ -146,6 +199,7 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean) {
     cost: () => (session.costUsd > 0 ? session.costUsd : undefined),
     get ctxWindow() { return session.contextWindow ?? CTX_WINDOW; },
     turn: (text) => session.send(text),
+    afterTurn: () => learn(),
     abort: () => session.abort(),
     reset: () => session.reset(),
     commands: {
@@ -161,7 +215,8 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean) {
         },
       },
       "/context": unavailable,
-      "/learn": unavailable,
+      "/learn": { desc: "extrai skills do último turno agora", run: async () => { await learn(true); } },
+      "/skills": skillsCommand(root, io),
     },
     close: async () => {},
   };
@@ -205,18 +260,7 @@ program
     loadProjectAgents(root);
 
     /** Depois de tarefas complexas (ou uso de skill), propõe criar/melhorar skills. */
-    const learn = async (force = false) => {
-      if (!force && !shouldReflect(agent.lastTurn, ctx)) return;
-      if (!agent.lastTurn) { ui.info("Nada para refletir ainda."); return; }
-      ui.info("✦ refletindo sobre a tarefa para extrair skills…");
-      ui.turnStart();
-      try {
-        const notes = await reflect(agent.lastTurn, ctx, process.env.BRITO_LEARN_MODEL ?? MODEL);
-        ui.turnEnd(false);
-        for (const n of notes) ui.print(c.ok("✦ ") + n);
-        if (!notes.length) ui.info("✦ nenhuma skill nova");
-      } catch (e: any) { ui.turnEnd(false); ui.error(`reflexão falhou: ${e?.message ?? e}`); }
-    };
+    const learn = makeLearner(() => agent.recentTurns, ctx, defaultComplete, process.env.BRITO_LEARN_MODEL ?? MODEL);
 
     const turn = async (text: string, signal: AbortSignal) => {
       ui.turnStart();
@@ -241,7 +285,7 @@ program
       cost: () => (Number.isFinite(PRICE_IN) && Number.isFinite(PRICE_OUT) ? (agent.usage.input * PRICE_IN + agent.usage.output * PRICE_OUT) / 1e6 : undefined),
       turn,
       afterTurn: () => learn(),
-      reset: () => { agent.messages = []; agent.contextTokens = 0; },
+      reset: () => { agent.messages = []; agent.contextTokens = 0; agent.recentTurns = []; agent.lastTurn = null; },
       onShell: () => { ctx.dirty = true; }, // `!cmd` pode ter mudado o código
       commands: {
         "/model": { desc: "modelo em uso", run: async () => { ui.print(`  ${c.soft(agent.model)} ${c.muted("(troque com BRITO_MODEL; subagentes explore usam BRITO_EXPLORE_MODEL)")}`); } },
@@ -255,6 +299,7 @@ program
         },
         "/index": { desc: "reconstrói o grafo do zero", run: async () => { ui.info("reconstruindo grafo…"); ui.print(c.muted(JSON.stringify(await indexProject(root, graph, { full: true })))); } },
         "/learn": { desc: "extrai skills do último turno agora", run: async () => { await learn(true); } },
+        "/skills": skillsCommand(root, io),
       },
       close: async () => { await graph.close(); },
     };

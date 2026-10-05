@@ -1,0 +1,48 @@
+{
+  "expect": "none",
+  "note": "pergunta simples, sem procedimento",
+  "turn": {
+    "toolCalls": 1,
+    "errors": 0,
+    "finished": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "O que faz a função shouldReflect?"
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "1",
+            "name": "graph_search",
+            "input": {
+              "query": "shouldReflect"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "1",
+            "content": "src/skills/learn.ts:10 shouldReflect(turn, ctx)"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Decide se vale refletir: turno concluído com ≥6 tools ou skill usada."
+          }
+        ]
+      }
+    ]
+  },
+  "expectReflect": false
+}

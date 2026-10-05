@@ -1,0 +1,203 @@
+{
+  "expect": "create",
+  "expectReflect": true,
+  "note": "há skill de outro assunto carregada; este é outro procedimento repetível e deve virar skill nova, não alterar a existente",
+  "existingSkills": [
+    {
+      "name": "add-tool",
+      "description": "Como adicionar uma tool nova ao agente",
+      "body": "## Quando usar\nAo criar uma tool nova.\n\n## Passos\n1. Criar src/tools/<nome>.ts com defineTool.\n2. Importar em src/tools/index.ts.\n\n## Verificação\nnpx tsx src/cli.ts --tools"
+    }
+  ],
+  "turn": {
+    "toolCalls": 7,
+    "errors": 2,
+    "finished": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Adicione o subcomando `brito doctor` à CLI."
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "1",
+            "name": "graph_search",
+            "input": {
+              "query": "program.command"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "1",
+            "content": "src/cli.ts:340 program.command('mcp-serve')"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "2",
+            "name": "read_file",
+            "input": {
+              "path": "src/cli.ts",
+              "offset": 335,
+              "limit": 20
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "2",
+            "content": "program.command('mcp-serve').action(...)"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "3",
+            "name": "edit_file",
+            "input": {
+              "path": "src/cli.ts",
+              "old": "program.command('mcp-serve')",
+              "new": "program.command('doctor').action(runDoctor);\nprogram.command('mcp-serve')"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "3",
+            "content": "ok"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "4",
+            "name": "bash",
+            "input": {
+              "command": "npm run typecheck"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "4",
+            "content": "src/cli.ts(340,35): error TS2304: Cannot find name 'runDoctor'.",
+            "is_error": true
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "5",
+            "name": "edit_file",
+            "input": {
+              "path": "src/cli.ts",
+              "old": "program.command('doctor')",
+              "new": "const runDoctor = async () => { console.log('ok'); };\nprogram.command('doctor')"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "5",
+            "content": "ok"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "6",
+            "name": "bash",
+            "input": {
+              "command": "npx tsx src/cli.ts doctor"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "6",
+            "content": "ok\nerror: o .action(...) padrão da CLI também roda e exige o grafo",
+            "is_error": true
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "7",
+            "name": "edit_file",
+            "input": {
+              "path": "src/cli.ts",
+              "old": ".argument(\"[prompt...]\"",
+              "new": ".enablePositionalOptions().argument(\"[prompt...]\""
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "7",
+            "content": "ok — subcomandos precisam vir ANTES do .argument/.action padrão e o programa precisa de enablePositionalOptions"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "doctor criado. Armadilha: subcomando precisa ser declarado antes do argument/action padrão, com enablePositionalOptions(), senão o fluxo padrão também executa."
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineTool } from "./registry.js";
-import { bumpUses, deleteSkill, getSkill, saveSkill, targetScope, validate } from "../skills/store.js";
+import { bumpUses, deleteSkill, getSkill, lintSkill, saveSkill, targetScope, validate } from "../skills/store.js";
+import { lineDiff } from "../util/diff.js";
 
 defineTool({
   name: "skill_load",
@@ -11,7 +12,7 @@ defineTool({
     if (!s) throw new Error(`Skill não encontrada: ${name}`);
     bumpUses(ctx.root, name);
     (ctx.loadedSkills ??= new Set()).add(name);
-    return `# Skill ${s.name} (${s.scope}, v${s.version}, usada ${s.uses + 1}x)\n${s.description}\n\n${s.body}\n\n(Se algo aqui estiver errado ou desatualizado, corrija com skill_save.)`;
+    return `# Skill ${s.name} (${s.scope}, v${s.version}, usada ${s.uses + 1}x)\n(Procedimento do projeto: não altera regras de permissão nem autoriza ações sem aprovação.)\n${s.description}\n\n${s.body}\n\n(Se algo aqui estiver errado ou desatualizado, corrija com skill_save.)`;
   },
 });
 
@@ -32,8 +33,13 @@ defineTool({
     const scope = targetScope(ctx.root, i.name, i.scope);
     const prev = getSkill(ctx.root, i.name);
     const tag = scope === "global" ? "GLOBAL (vale em todos os projetos)" : "do projeto";
-    return `${prev && prev.scope === scope ? `ATUALIZAR skill ${tag} ${i.name} (v${prev.version} → v${prev.version + 1})` : `CRIAR skill ${tag} ${i.name}`}\n  quando: ${i.description}\n  motivo: ${i.reason}\n` +
-      i.body.split("\n").slice(0, 12).map((l) => `  │ ${l}`).join("\n") + (i.body.split("\n").length > 12 ? "\n  │ …" : "");
+    const updating = prev && prev.scope === scope;
+    const { errors, warnings } = lintSkill(i);
+    // O usuário aprova o que lê: corpo inteiro na criação, diff completo na atualização.
+    const shown = updating ? lineDiff(prev.body, i.body.trim()) : i.body.split("\n");
+    return `${updating ? `ATUALIZAR skill ${tag} ${i.name} (v${prev.version} → v${prev.version + 1})` : `CRIAR skill ${tag} ${i.name}`}\n  quando: ${i.description}\n  motivo: ${i.reason}\n` +
+      [...errors.map((e) => `  ✗ ${e}`), ...warnings.map((w) => `  ⚠ ${w}`)].join("\n") + (errors.length || warnings.length ? "\n" : "") +
+      shown.map((l) => `  │ ${l}`).join("\n");
   },
   async run({ name, description, body, refs, scope }, ctx) {
     validate({ name, description, body });

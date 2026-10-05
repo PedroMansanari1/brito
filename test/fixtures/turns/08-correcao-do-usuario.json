@@ -1,0 +1,118 @@
+{
+  "expect": "create",
+  "expectReflect": true,
+  "note": "o usuário corrige a abordagem; a convenção do projeto vale para tarefas futuras",
+  "turn": {
+    "toolCalls": 4,
+    "errors": 0,
+    "finished": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Não, não use mock do banco nos testes de repositório. Neste projeto esses testes rodam contra o sqlite em memória com `npm run test:db`; mocks já esconderam bug de migração duas vezes. Refaça o teste do OrderRepository assim."
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "1",
+            "name": "read_file",
+            "input": {
+              "path": "test/order.repo.test.ts"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "1",
+            "content": "import { mockDb } from './helpers'; ... mockDb.order.findMany = jest.fn()"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "2",
+            "name": "read_file",
+            "input": {
+              "path": "test/helpers/sqlite.ts"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "2",
+            "content": "export function memoryDb() { /* sqlite :memory: + migrate */ }"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "3",
+            "name": "write_file",
+            "input": {
+              "path": "test/order.repo.test.ts",
+              "content": "import { memoryDb } from './helpers/sqlite'; // usa migrations reais"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "3",
+            "content": "ok"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "4",
+            "name": "bash",
+            "input": {
+              "command": "npm run test:db -- order.repo"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "4",
+            "content": "1 passed"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Refeito com sqlite em memória e migrations reais; passou em npm run test:db."
+          }
+        ]
+      }
+    ]
+  }
+}

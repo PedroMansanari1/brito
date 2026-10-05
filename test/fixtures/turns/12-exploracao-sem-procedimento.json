@@ -1,0 +1,255 @@
+{
+  "expect": "none",
+  "expectReflect": false,
+  "note": "muitas leituras para responder uma pergunta; é explicação, não procedimento",
+  "turn": {
+    "toolCalls": 10,
+    "errors": 0,
+    "finished": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Como funciona o fluxo de autenticação deste projeto?"
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "1",
+            "name": "graph_search",
+            "input": {
+              "query": "auth"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "1",
+            "content": "src/auth/index.ts, src/auth/jwt.ts, src/auth/middleware.ts"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "2",
+            "name": "read_file",
+            "input": {
+              "path": "src/auth/index.ts"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "2",
+            "content": "export * from './jwt'; export * from './middleware'"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "3",
+            "name": "read_file",
+            "input": {
+              "path": "src/auth/jwt.ts"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "3",
+            "content": "sign(user) { jwt.sign(...) } verify(token) {...}"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "4",
+            "name": "read_file",
+            "input": {
+              "path": "src/auth/middleware.ts"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "4",
+            "content": "requireAuth(req,res,next) { verify(req.headers.authorization) ... }"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "5",
+            "name": "graph_callers",
+            "input": {
+              "symbol": "requireAuth"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "5",
+            "content": "src/routes/orders.ts, src/routes/users.ts"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "6",
+            "name": "read_file",
+            "input": {
+              "path": "src/routes/orders.ts"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "6",
+            "content": "router.use(requireAuth)"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "7",
+            "name": "grep",
+            "input": {
+              "pattern": "JWT_SECRET"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "7",
+            "content": "src/auth/jwt.ts:3 process.env.JWT_SECRET"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "8",
+            "name": "read_file",
+            "input": {
+              "path": "src/routes/login.ts"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "8",
+            "content": "POST /login -> sign(user)"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "9",
+            "name": "grep",
+            "input": {
+              "pattern": "refresh"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "9",
+            "content": "(sem resultados)"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "10",
+            "name": "read_file",
+            "input": {
+              "path": "README.md"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "10",
+            "content": "# API"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "POST /login assina um JWT (jwt.ts). O middleware requireAuth verifica o header Authorization e protege as rotas de orders e users. Não há refresh token."
+          }
+        ]
+      }
+    ]
+  }
+}

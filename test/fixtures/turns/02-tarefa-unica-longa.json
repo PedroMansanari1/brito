@@ -1,0 +1,192 @@
+{
+  "expect": "none",
+  "note": "muitas tools mas trabalho específico, sem método reutilizável",
+  "turn": {
+    "toolCalls": 7,
+    "errors": 0,
+    "finished": true,
+    "messages": [
+      {
+        "role": "user",
+        "content": "Renomeie o botão 'Enviar' para 'Confirmar' na tela de checkout e ajuste o texto do toast."
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "1",
+            "name": "grep",
+            "input": {
+              "pattern": "Enviar"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "1",
+            "content": "src/ui/Checkout.tsx:41: <Button>Enviar</Button>\nsrc/ui/Toast.tsx:9: 'Enviar com sucesso'"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "2",
+            "name": "read_file",
+            "input": {
+              "path": "src/ui/Checkout.tsx",
+              "offset": 35,
+              "limit": 15
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "2",
+            "content": "...<Button>Enviar</Button>..."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "3",
+            "name": "edit_file",
+            "input": {
+              "path": "src/ui/Checkout.tsx",
+              "old": "Enviar",
+              "new": "Confirmar"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "3",
+            "content": "ok"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "4",
+            "name": "read_file",
+            "input": {
+              "path": "src/ui/Toast.tsx"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "4",
+            "content": "...'Enviar com sucesso'..."
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "5",
+            "name": "edit_file",
+            "input": {
+              "path": "src/ui/Toast.tsx",
+              "old": "Enviar com sucesso",
+              "new": "Confirmado com sucesso"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "5",
+            "content": "ok"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "6",
+            "name": "bash",
+            "input": {
+              "command": "npm run typecheck"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "6",
+            "content": "ok"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "id": "7",
+            "name": "grep",
+            "input": {
+              "pattern": "Enviar"
+            }
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "7",
+            "content": "(sem resultados)"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "Renomeado nos dois lugares."
+          }
+        ]
+      }
+    ]
+  },
+  "expectReflect": false
+}
