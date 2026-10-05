@@ -3,7 +3,14 @@ import path from "node:path";
 import { exec } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { Dock, type Command } from "./ui/dock.js";
+import os from "node:os";
 import { ui, c, fmtTokens, type BannerInfo } from "./ui/ui.js";
+import { cols } from "./ui/theme.js";
+
+/** Nome do usuário da máquina (fallback para variáveis de ambiente). */
+const userName = () => {
+  try { return os.userInfo().username; } catch { return process.env.USER ?? process.env.USERNAME ?? "você"; }
+};
 import { listSkills, deleteSkill, promoteSkill, globalHome } from "./skills/store.js";
 import { listAgents } from "./agent/agents.js";
 import { perms, cycleMode, MODE_LABEL, type PermMode } from "./permissions.js";
@@ -145,7 +152,15 @@ export async function runRepl(b: ReplBackend, o: ReplOpts) {
   const echo = (text: string) => {
     const lines = text.split("\n");
     const shown = lines.length > 4 ? [...lines.slice(0, 3), c.dim(`… (+${lines.length - 3} linhas)`)] : lines;
-    ui.print("\n" + c.bold(c.light("❯ ")) + shown.map((l, i) => (i ? "  " : "") + c.soft(l)).join("\n"));
+    // balão do usuário: mesmo formato da caixa do Brito, em vermelho e com o nome de usuário da máquina
+    const label = ` ${userName()} `;
+    const room = Math.max(10, cols() - 2);
+    const body = shown.flatMap((l) => (l.length <= room ? [l] : l.match(new RegExp(`.{1,${room}}`, "gs")) ?? [l]));
+    ui.print(
+      "\n" + c.err("╭─") + c.bold(c.err(label)) + c.err("─".repeat(Math.max(2, cols() - label.length - 2))) + "\n" +
+      body.map((l) => c.err("│ ") + c.bold(c.err(l))).join("\n") + "\n" +
+      c.err("╰" + "─".repeat(cols() - 1)),
+    );
   };
 
   const shutdown = async () => {

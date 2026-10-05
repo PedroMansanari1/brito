@@ -227,7 +227,10 @@ export class Dock {
       let text = lines[idx];
       if (idx === 0 && this.buf.length === 0) {
         text = c.dim(this.promptOverride ? "" : this.busy ? "digite para enfileirar · Ctrl+C interrompe" : "mensagem · / comandos · !cmd shell · Alt+Enter nova linha · ⇧Tab modo");
-      } else text = text.replace(PASTE_RE, (mk) => c.rgb([255, 200, 120])(mk));
+      } else {
+        // escrita do usuário: negrito vermelho (mesma cor de "tudo liberado"); marcadores de colagem em âmbar
+        text = text.split(/(\[colado #\d+: [^\]]*\])/).map((p, i) => (i % 2 ? c.rgb([255, 200, 120])(p) : p ? c.bold(c.err(p)) : p)).join("");
+      }
       out.push(lead + text);
     }
     out.push(rule);
