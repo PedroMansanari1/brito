@@ -11,7 +11,9 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts",
-    "eval:learn": "tsx test/eval-learn.ts"
+    "eval:learn": "tsx test/eval-learn.ts",
+    "prepare": "tsc",
+    "prepublishOnly": "npm run typecheck && npm test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",
@@ -28,5 +30,23 @@
     "@types/node": "latest",
     "tsx": "latest",
     "typescript": "latest"
-  }
+  },
+  "license": "MIT",
+  "author": "Wilson Brito",
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    ".brito/agents",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "cli",
+    "agent",
+    "llm",
+    "knowledge-graph",
+    "claude"
+  ]
 }
