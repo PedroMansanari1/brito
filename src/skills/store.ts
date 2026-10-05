@@ -12,6 +12,8 @@ export interface Skill {
   uses: number;
   created: string;
   updated: string;
+  /** último skill_load (ausente em skills antigas = `updated`) */
+  lastUsed: string;
   /** arquivos/símbolos a que a skill se aplica (liga skill ↔ grafo) */
   refs: string[];
   body: string;
@@ -40,6 +42,7 @@ function parse(text: string, scope: Scope): Skill | null {
     uses: Number(meta.uses) || 0,
     created: meta.created ?? today(),
     updated: meta.updated ?? today(),
+    lastUsed: meta.lastUsed ?? meta.updated ?? today(),
     refs: (meta.refs ?? "").split(",").map((r) => r.trim()).filter(Boolean),
     body: body.trim(),
     scope,
@@ -51,7 +54,7 @@ function write(root: string, s: Skill) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(
     file,
-    stringifyFrontmatter({ name: s.name, description: s.description, version: s.version, uses: s.uses, created: s.created, updated: s.updated, refs: s.refs.join(", ") }, s.body),
+    stringifyFrontmatter({ name: s.name, description: s.description, version: s.version, uses: s.uses, created: s.created, updated: s.updated, lastUsed: s.lastUsed, refs: s.refs.join(", ") }, s.body),
   );
 }
 
@@ -74,11 +77,28 @@ function listScope(root: string, scope: Scope): Skill[] {
     .flatMap((d) => { const s = getSkillIn(root, d.name, scope); return s ? [s] : []; });
 }
 
-export function listSkills(root: string): Skill[] {
+const DAY = 86_400_000;
+export const daysSince = (date: string, now = Date.now()) => Math.max(0, Math.floor((now - new Date(date).getTime()) / DAY));
+
+/** Uso conta, mas skill recente também: sem isso, skills novas (uses=0) cairiam do corte do índice. */
+export const rank = (s: Skill, now = Date.now()) => s.uses + 5 / (1 + daysSince(s.lastUsed, now) / 7);
+
+export function listSkills(root: string, now = Date.now()): Skill[] {
   const project = listScope(root, "project");
   const taken = new Set(project.map((s) => s.name));
   return [...project, ...listScope(root, "global").filter((s) => !taken.has(s.name))]
-    .sort((a, b) => b.uses - a.uses || a.name.localeCompare(b.name));
+    .sort((a, b) => rank(b, now) - rank(a, now) || a.name.localeCompare(b.name));
+}
+
+const PATH_EXT = /\.(tsx?|jsx?|json|md|py|go|rs|java|ya?ml|toml|css|html|sh|sql|prisma)$/i;
+
+/** Refs que apontam para arquivo e não existem mais. Símbolos ficam "não verificados". Skill global não cita arquivos do projeto. */
+export function staleRefs(root: string, s: Skill): string[] {
+  if (s.scope === "global") return [];
+  return s.refs.filter((ref) => {
+    const file = ref.split(/[:#]/)[0].trim();
+    return (file.includes("/") || PATH_EXT.test(file)) && !fs.existsSync(path.join(root, file));
+  });
 }
 
 /** Padrões que nunca devem entrar numa skill: ela vira instrução do agente via `skill_load`. */
@@ -128,6 +148,7 @@ export function saveSkill(root: string, input: SkillInput, scope?: Scope): { cre
     uses: prev?.uses ?? 0,
     created: prev?.created ?? today(),
     updated: today(),
+    lastUsed: prev?.lastUsed ?? today(),
     refs: input.refs ?? prev?.refs ?? [],
     body: input.body.trim(),
     scope: target,
@@ -184,7 +205,7 @@ export function rejectPending(root: string, name: string): boolean {
 
 export function bumpUses(root: string, name: string) {
   const s = getSkill(root, name);
-  if (s) write(root, { ...s, uses: s.uses + 1 });
+  if (s) write(root, { ...s, uses: s.uses + 1, lastUsed: today() });
 }
 
 /** Move para `.trash` do próprio escopo em vez de apagar. */
@@ -208,7 +229,7 @@ export function promoteSkill(root: string, name: string): void {
 }
 
 /** Índice compacto para o system prompt (divulgação progressiva: o corpo só entra via skill_load). */
-export function skillsIndex(root: string, max = 40): string {
-  const all = listSkills(root).slice(0, max);
-  return all.length ? all.map((s) => `- ${s.name}${s.scope === "global" ? " (global)" : ""}: ${s.description}`).join("\n") : "";
+export function skillsIndex(root: string, max = 40, now = Date.now()): string {
+  const all = listSkills(root, now).slice(0, max);
+  return all.length ? all.map((s) => `- ${s.name}${s.scope === "global" ? " (global)" : ""}${staleRefs(root, s).length ? " [refs obsoletas]" : ""}: ${s.description}`).join("\n") : "";
 }

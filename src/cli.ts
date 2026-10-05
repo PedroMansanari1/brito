@@ -19,7 +19,8 @@ import { hasClaudeCli, ClaudeSession } from "./agent/claude-cli.js";
 import { serveMcp } from "./mcp/server.js";
 import "./tools/skills.js";
 import type { ToolContext } from "./tools/registry.js";
-import { approvePending, listPending, listSkills, rejectPending, skillsIndex } from "./skills/store.js";
+import { approvePending, listPending, listSkills, rejectPending, skillsIndex, staleRefs } from "./skills/store.js";
+import { applyProposal, describeProposal, proposeConsolidation, pruneCandidates, type Proposal } from "./skills/consolidate.js";
 import { defaultComplete, reflect, shouldReflect, type Complete } from "./skills/learn.js";
 import { claudeCliComplete } from "./skills/learn-cli.js";
 import type { TurnRecord } from "./agent/loop.js";
@@ -113,10 +114,24 @@ function startApprovalServer(io: { ask: (q: string, opts?: { force?: boolean }) 
   return { path: sock, close };
 }
 
-/** `/skills`: lista skills e revisa propostas pendentes. Vale para os dois backends. */
-const skillsCommand = (root: string, io: { ask: (q: string, opts?: { force?: boolean }) => Promise<boolean> }) => ({
-  desc: "lista skills; pending | approve <nome> | reject <nome>",
+/** `/skills`: lista, revisa propostas pendentes e consolida a biblioteca. Vale para os dois backends. */
+const skillsCommand = (root: string, io: { ask: (q: string, opts?: { force?: boolean }) => Promise<boolean> }, llm: { complete: Complete; model: string }) => ({
+  desc: "lista skills; pending | approve <nome> | reject <nome> | consolidate",
   run: async ([sub, name]: string[]) => {
+    if (sub === "consolidate") {
+      ui.info("✦ analisando a biblioteca de skills…");
+      ui.turnStart();
+      let proposals: Proposal[];
+      try { proposals = await proposeConsolidation(root, llm.model, llm.complete); ui.turnEnd(false); }
+      catch (e: any) { ui.turnEnd(false); ui.error(`consolidação falhou: ${e?.message ?? e}`); return; }
+      if (!proposals.length) { ui.info("✦ biblioteca saudável, nada a consolidar"); return; }
+      for (const p of proposals) {
+        // force: mesmo em bypass, cada merge/remoção exige um sim explícito.
+        if (!(await io.ask(describeProposal(root, p), { force: true }))) { ui.info("ignorada"); continue; }
+        try { ui.print(c.ok("✦ ") + applyProposal(root, p)); } catch (e: any) { ui.error(e?.message ?? String(e)); }
+      }
+      return;
+    }
     if (sub === "approve" || sub === "reject") {
       if (!name) { ui.warn(`uso: /skills ${sub} <nome>`); return; }
       try {
@@ -137,7 +152,13 @@ const skillsCommand = (root: string, io: { ask: (q: string, opts?: { force?: boo
       for (const p of pending) ui.print(`  ${c.soft(p.name)} ${c.muted(`(${p.scope}) ${p.description}`)}`);
       return;
     }
-    for (const s of listSkills(root)) ui.print(`  ${c.soft(s.name)} ${c.muted(`(${s.scope}) v${s.version} · ${s.uses} usos · ${s.description}`)}`);
+    const skills = listSkills(root);
+    for (const s of skills) {
+      const stale = staleRefs(root, s);
+      ui.print(`  ${c.soft(s.name)} ${c.muted(`(${s.scope}) v${s.version} · ${s.uses} usos · último uso ${s.lastUsed} · ${s.description}`)}${stale.length ? " " + c.warn(`⚠ refs obsoletas: ${stale.join(", ")}`) : ""}`);
+    }
+    const prune = pruneCandidates(skills);
+    if (prune.length) ui.info(`${prune.length} candidata(s) a poda (sem uso há mais de 30 dias): /skills consolidate`);
     if (pending.length) ui.info(`${pending.length} proposta(s) pendente(s): /skills pending`);
   },
 });
@@ -216,7 +237,7 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean) {
       },
       "/context": unavailable,
       "/learn": { desc: "extrai skills do último turno agora", run: async () => { await learn(true); } },
-      "/skills": skillsCommand(root, io),
+      "/skills": skillsCommand(root, io, { complete: claudeCliComplete, model: process.env.BRITO_LEARN_MODEL ?? "" }),
     },
     close: async () => {},
   };
@@ -299,7 +320,7 @@ program
         },
         "/index": { desc: "reconstrói o grafo do zero", run: async () => { ui.info("reconstruindo grafo…"); ui.print(c.muted(JSON.stringify(await indexProject(root, graph, { full: true })))); } },
         "/learn": { desc: "extrai skills do último turno agora", run: async () => { await learn(true); } },
-        "/skills": skillsCommand(root, io),
+        "/skills": skillsCommand(root, io, { complete: defaultComplete, model: process.env.BRITO_LEARN_MODEL ?? MODEL }),
       },
       close: async () => { await graph.close(); },
     };

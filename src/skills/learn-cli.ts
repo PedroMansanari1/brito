@@ -21,11 +21,15 @@ const SCHEMA = {
         required: ["name", "description", "body", "reason"],
       },
     },
+    deletes: {
+      type: "array",
+      items: { type: "object", properties: { name: { type: "string" }, reason: { type: "string" } }, required: ["name", "reason"] },
+    },
   },
   required: ["saves"],
 };
 
-const NOTE = `\n\nNeste modo você não chama tools. Em vez de chamar skill_save, devolva JSON {"saves":[…]} com um item por chamada (mesmos campos de skill_save). Se nada vale salvar, devolva {"saves":[]}.`;
+const NOTE = `\n\nNeste modo você não chama tools. Em vez de chamar skill_save, devolva JSON {"saves":[…]} com um item por chamada (mesmos campos de skill_save). Se nada vale salvar, devolva {"saves":[]}. Só preencha "deletes" (itens {name, reason}, equivalentes a skill_delete) se as instruções pedirem remoções.`;
 
 export const claudeCliComplete: Complete = ({ model, system, user }) =>
   new Promise((resolve, reject) => {
@@ -42,7 +46,11 @@ export const claudeCliComplete: Complete = ({ model, system, user }) =>
         const res = JSON.parse(out);
         if (res.is_error) throw new Error(String(res.result ?? "erro do claude"));
         const saves: Record<string, unknown>[] = res.structured_output?.saves ?? JSON.parse(res.result).saves ?? [];
-        resolve(saves.map((s, i) => ({ type: "tool_use", id: `cli-${i}`, name: "skill_save", input: { refs: [], ...s } }) as unknown as Anthropic.ContentBlock));
+        const deletes: Record<string, unknown>[] = res.structured_output?.deletes ?? [];
+        resolve([
+          ...saves.map((s, i) => ({ type: "tool_use", id: `cli-s${i}`, name: "skill_save", input: { refs: [], ...s } })),
+          ...deletes.map((d, i) => ({ type: "tool_use", id: `cli-d${i}`, name: "skill_delete", input: d })),
+        ] as unknown as Anthropic.ContentBlock[]);
       } catch (e: any) { reject(new Error(`claude CLI falhou (código ${code}): ${e?.message ?? e} ${err.slice(0, 200)}`)); }
     });
     child.stdin.end(user);

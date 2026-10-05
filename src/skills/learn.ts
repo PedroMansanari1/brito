@@ -3,7 +3,7 @@ import { z } from "zod";
 import { execTool, toApiTools, type ToolContext } from "../tools/registry.js";
 import type { TurnRecord } from "../agent/loop.js";
 import { perms } from "../permissions.js";
-import { getSkill, listSkills, savePending } from "./store.js";
+import { getSkill, listSkills, savePending, staleRefs } from "./store.js";
 
 /** Turno longo sem nenhum outro sinal só vale reflexão a partir deste tamanho. */
 const MIN_TOOLS = Number(process.env.BRITO_SKILL_MIN_TOOLS ?? 12);
@@ -126,8 +126,8 @@ export function buildReflectInput(turn: TurnRecord, ctx: ToolContext, previous?:
   const loaded = [...(ctx.loadedSkills ?? [])].flatMap((n) => { const s = getSkill(ctx.root, n); return s ? [s] : []; });
   const signals = extractSignals(turn);
   return (
-    `# Skills existentes\n${existing.length ? existing.map((s) => `- ${s.name}${s.scope === "global" ? " (global)" : ""}: ${s.description}`).join("\n") : "(nenhuma)"}\n\n` +
-    (loaded.length ? `# Skills carregadas neste turno (candidatas a melhoria)\n${loaded.map((s) => `## ${s.name} (${s.scope}) v${s.version}\n${s.body}`).join("\n\n")}\n\n` : "") +
+    `# Skills existentes\n${existing.length ? existing.map((s) => `- ${s.name}${s.scope === "global" ? " (global)" : ""}${staleRefs(ctx.root, s).length ? " [refs obsoletas]" : ""}: ${s.description}`).join("\n") : "(nenhuma)"}\n\n` +
+    (loaded.length ? `# Skills carregadas neste turno (candidatas a melhoria)\n${loaded.map((s) => `## ${s.name} (${s.scope}) v${s.version}${staleRefs(ctx.root, s).length ? `\n(refs que não existem mais: ${staleRefs(ctx.root, s).join(", ")} — atualize se o turno mostrou os caminhos novos)` : ""}\n${s.body}`).join("\n\n")}\n\n` : "") +
     (signals.length ? `# Sinais\n${signals.map((x) => `- ${x.kind}: ${x.detail}`).join("\n")}\n\n` : "") +
     (previous ? `# Turno anterior (só contexto, não é o que está sendo avaliado)\n${renderPrevious(previous)}\n\n` : "") +
     `# Transcript do turno (${turn.toolCalls} chamadas de tool, ${turn.errors} com erro)\n${renderTranscript(turn)}`

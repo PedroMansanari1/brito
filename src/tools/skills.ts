@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineTool } from "./registry.js";
-import { bumpUses, deleteSkill, getSkill, lintSkill, saveSkill, targetScope, validate } from "../skills/store.js";
-import { lineDiff } from "../util/diff.js";
+import { bumpUses, deleteSkill, getSkill, saveSkill, validate } from "../skills/store.js";
+import { describeSave } from "../skills/describe.js";
 
 defineTool({
   name: "skill_load",
@@ -29,18 +29,7 @@ defineTool({
     reason: z.string().describe("por que vale salvar/alterar (mostrado ao usuário)"),
   }),
   dangerous: true,
-  describe: (i, ctx) => {
-    const scope = targetScope(ctx.root, i.name, i.scope);
-    const prev = getSkill(ctx.root, i.name);
-    const tag = scope === "global" ? "GLOBAL (vale em todos os projetos)" : "do projeto";
-    const updating = prev && prev.scope === scope;
-    const { errors, warnings } = lintSkill(i);
-    // O usuário aprova o que lê: corpo inteiro na criação, diff completo na atualização.
-    const shown = updating ? lineDiff(prev.body, i.body.trim()) : i.body.split("\n");
-    return `${updating ? `ATUALIZAR skill ${tag} ${i.name} (v${prev.version} → v${prev.version + 1})` : `CRIAR skill ${tag} ${i.name}`}\n  quando: ${i.description}\n  motivo: ${i.reason}\n` +
-      [...errors.map((e) => `  ✗ ${e}`), ...warnings.map((w) => `  ⚠ ${w}`)].join("\n") + (errors.length || warnings.length ? "\n" : "") +
-      shown.map((l) => `  │ ${l}`).join("\n");
-  },
+  describe: (i, ctx) => describeSave(ctx.root, i),
   async run({ name, description, body, refs, scope }, ctx) {
     validate({ name, description, body });
     const r = saveSkill(ctx.root, { name, description, body, refs }, scope);
