@@ -4,6 +4,7 @@ import { execTool, toApiTools, type ToolContext } from "../tools/registry.js";
 import type { TurnRecord } from "../agent/loop.js";
 import { perms } from "../permissions.js";
 import { getSkill, listSkills, savePending, staleRefs } from "./store.js";
+import { appendJournal, describeEntry, entryFromTurn, similarEntries } from "./journal.js";
 
 /** Turno longo sem nenhum outro sinal só vale reflexão a partir deste tamanho. */
 const MIN_TOOLS = Number(process.env.BRITO_SKILL_MIN_TOOLS ?? 12);
@@ -125,10 +126,12 @@ export function buildReflectInput(turn: TurnRecord, ctx: ToolContext, previous?:
   const existing = listSkills(ctx.root);
   const loaded = [...(ctx.loadedSkills ?? [])].flatMap((n) => { const s = getSkill(ctx.root, n); return s ? [s] : []; });
   const signals = extractSignals(turn);
+  const seen = similarEntries(ctx.root, turn);
   return (
     `# Skills existentes\n${existing.length ? existing.map((s) => `- ${s.name}${s.scope === "global" ? " (global)" : ""}${staleRefs(ctx.root, s).length ? " [refs obsoletas]" : ""}: ${s.description}`).join("\n") : "(nenhuma)"}\n\n` +
     (loaded.length ? `# Skills carregadas neste turno (candidatas a melhoria)\n${loaded.map((s) => `## ${s.name} (${s.scope}) v${s.version}${staleRefs(ctx.root, s).length ? `\n(refs que não existem mais: ${staleRefs(ctx.root, s).join(", ")} — atualize se o turno mostrou os caminhos novos)` : ""}\n${s.body}`).join("\n\n")}\n\n` : "") +
     (signals.length ? `# Sinais\n${signals.map((x) => `- ${x.kind}: ${x.detail}`).join("\n")}\n\n` : "") +
+    (seen.length ? `# Tarefas parecidas já vistas (sessões anteriores)\n${seen.map(describeEntry).join("\n")}\n\n` : "") +
     (previous ? `# Turno anterior (só contexto, não é o que está sendo avaliado)\n${renderPrevious(previous)}\n\n` : "") +
     `# Transcript do turno (${turn.toolCalls} chamadas de tool, ${turn.errors} com erro)\n${renderTranscript(turn)}`
   );
@@ -148,15 +151,24 @@ export async function reflect(turn: TurnRecord, ctx: ToolContext, model: string,
   const content = await complete({ model, maxTokens: 3000, system: SYSTEM, tools: toApiTools(new Set(["skill_save"])), user: buildReflectInput(turn, ctx, previous) });
 
   const out: string[] = [];
+  const saved: string[] = [];
   let saves = 0;
   for (const b of content) {
     if (b.type !== "tool_use" || b.name !== "skill_save" || saves >= MAX_SAVES) continue;
     saves++;
+    const name = String((b.input as { name?: unknown })?.name ?? "");
     // Em bypass nada pede aprovação: a proposta vai para a fila de revisão em vez de virar instrução ativa.
-    if (perms.mode === "bypass") { out.push(stage(b.input, ctx)); continue; }
+    if (perms.mode === "bypass") {
+      const msg = stage(b.input, ctx);
+      out.push(msg);
+      if (!msg.startsWith("skill não salva")) saved.push(name);
+      continue;
+    }
     const r = await execTool("skill_save", b.input, ctx);
     out.push(r.isError ? `skill não salva: ${r.text}` : r.text);
+    if (!r.isError && name) saved.push(name); // negada pelo usuário ou recusada pelo lint: não conta
   }
   ctx.loadedSkills?.clear();
+  try { appendJournal(ctx.root, entryFromTurn(turn, saved)); } catch { /* o journal é só um auxílio: nunca derruba a reflexão */ }
   return out;
 }

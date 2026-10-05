@@ -18,25 +18,28 @@ import { defaultComplete, reflect, shouldReflect, type Complete } from "../src/s
 import { claudeCliComplete } from "../src/skills/learn-cli.js";
 import { hasClaudeCli } from "../src/agent/claude-cli.js";
 import { saveSkill } from "../src/skills/store.js";
+import { appendJournal, type JournalEntry } from "../src/skills/journal.js";
 import { sandbox } from "./helpers.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dir = path.join(here, "fixtures/turns");
 const arg = (k: string) => process.argv.find((a) => a.startsWith(`--${k}=`))?.split("=")[1];
 const runs = Number(arg("runs") ?? 1);
+const only = arg("only")?.split(",") ?? []; // prefixos de fixture, ex.: --only=07,13
 const model = process.env.BRITO_LEARN_MODEL ?? MODEL;
 const useApi = !!process.env.ANTHROPIC_API_KEY;
 if (!useApi && !hasClaudeCli()) { console.error("Defina ANTHROPIC_API_KEY ou instale o claude CLI (/login)."); process.exit(2); }
 const backend = useApi ? "api" : "claude-cli";
 const base: Complete = useApi ? defaultComplete : claudeCliComplete;
 
-interface Fixture { expect: string; expectReflect: boolean; note: string; forbid?: string[]; existingSkills?: { name: string; description: string; body: string }[]; loadedSkills?: string[]; turn: any }
+interface Fixture { expect: string; expectReflect: boolean; note: string; forbid?: string[]; existingSkills?: { name: string; description: string; body: string }[]; loadedSkills?: string[]; journal?: JournalEntry[]; turn: any }
 type Outcome = "none" | "create" | `update:${string}`;
 
 async function runOnce(f: Fixture): Promise<{ gate: boolean; outcome: Outcome; leaked: boolean }> {
   const sb = sandbox();
   try {
     for (const s of f.existingSkills ?? []) saveSkill(sb.root, s);
+    for (const e of f.journal ?? []) appendJournal(sb.root, e);
     for (const n of f.loadedSkills ?? []) sb.ctx.loadedSkills!.add(n);
     const gate = shouldReflect(f.turn, sb.ctx); // antes do reflect, que limpa loadedSkills
     const saves: Anthropic.ToolUseBlock[] = [];
@@ -56,7 +59,7 @@ async function runOnce(f: Fixture): Promise<{ gate: boolean; outcome: Outcome; l
 
 const rows: string[] = [];
 const m = { negs: 0, reflectFalsePos: 0, poss: 0, reflectHits: 0, leaks: 0, gatePoss: 0, gateHits: 0, gateNegs: 0, gateWaste: 0, e2eHits: 0, e2eFalsePos: 0 };
-for (const file of fs.readdirSync(dir).filter((x) => x.endsWith(".json")).sort()) {
+for (const file of fs.readdirSync(dir).filter((x) => x.endsWith(".json") && (!only.length || only.some((o) => x.startsWith(o)))).sort()) {
   const f: Fixture = JSON.parse(fs.readFileSync(path.join(dir, file), "utf8"));
   const positive = f.expect !== "none";
   for (let i = 0; i < runs; i++) {
@@ -88,5 +91,5 @@ const report = [
 ].join("\n");
 
 console.log(report);
-if (process.argv.includes("--write-baseline")) fs.writeFileSync(path.join(here, "eval-baseline.md"), report);
+if (process.argv.includes("--write-baseline") && !only.length) fs.writeFileSync(path.join(here, "eval-baseline.md"), report);
 process.exit(m.reflectFalsePos || m.leaks ? 1 : 0);

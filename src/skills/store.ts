@@ -110,6 +110,11 @@ const LINT_RULES: { re: RegExp; msg: string }[] = [
   { re: /\b(sem|n[ãa]o|nunca|jamais)\s+(pe[çc]a|pedir|solicit(e|ar)|precisa)[^\n]{0,20}(aprova[çc][ãa]o|permiss[ãa]o|confirma[çc][ãa]o)|\b(pular|ignorar|burlar|desativar)\s+(a\s+)?(aprova[çc][ãa]o|permiss[ãa]o|permiss[õo]es)|\bskip\s+(the\s+)?(approval|permission)/i, msg: "dá instruções sobre pular aprovação/permissões" },
 ];
 
+/** Troca segredos e caminhos absolutos por [redigido]: para texto que vai ser guardado em disco (ex.: journal). */
+export function redact(text: string): string {
+  return LINT_RULES.slice(0, 2).reduce((t, r) => t.replace(new RegExp(r.re.source, "g"), "[redigido]"), text);
+}
+
 export function lintSkill(input: SkillInput): { errors: string[]; warnings: string[] } {
   const text = `${input.description}\n${input.body}`;
   const errors = LINT_RULES.filter((r) => r.re.test(text)).map((r) => r.msg);
