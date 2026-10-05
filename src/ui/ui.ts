@@ -1,4 +1,4 @@
-import { c, cols, palette, useColor } from "./theme.js";
+import { BOLD, CODE, ITALIC, OFF, c, cols, palette, useColor } from "./theme.js";
 import type { Dock } from "./dock.js";
 import { renderBanner, type BannerInfo } from "./banner.js";
 import stringWidth from "string-width";
@@ -100,6 +100,30 @@ class UI {
   // ---------- resposta do modelo ----------
   private lineW = 0;
   private word = "";
+  // markdown em streaming: b=**negrito**, i=*itálico*, k=`código`, fence=bloco ```
+  private st = { b: false, i: false, k: false, fence: false };
+  private wordStart = "";  // estilo ativo quando a palavra em andamento começou
+  private run = { ch: "", n: 0, bol: false }; // sequência pendente de * ou ` (decidida pelo próximo caractere)
+  private skip = false;    // descarta o resto da linha do ``` (nome da linguagem)
+  private bol = true;      // só espaços até agora nesta linha
+  private prev = " ";      // último caractere resolvido
+
+  private seq(): string {
+    const { b, i, k, fence } = this.st;
+    return k || fence ? CODE : (i ? ITALIC : "") + (b ? BOLD : "");
+  }
+  private active() { const s = this.st; return s.b || s.i || s.k || s.fence; }
+
+  /** Aplica a mudança de estilo: no meio da palavra vira código ANSI; entre palavras vira o estilo inicial da próxima. */
+  private restyle() {
+    if (this.word) this.word += OFF + this.seq(); else this.wordStart = this.seq();
+  }
+
+  private resetStyle() {
+    this.st = { b: false, i: false, k: false, fence: false };
+    this.run = { ch: "", n: 0, bol: false };
+    this.wordStart = ""; this.skip = false; this.bol = true; this.prev = " ";
+  }
 
   /** Descarrega a palavra em andamento, quebrando a linha antes dela se não couber. */
   private emitWord() {
@@ -108,9 +132,60 @@ class UI {
     const room = cols() - 2;
     if (this.lineW > 0 && this.lineW + w > room) { this.out("\n"); this.lineStart = true; this.lineW = 0; }
     if (this.lineStart) { this.out(c.accent("│ ")); this.lineStart = false; }
-    this.out(this.word);
+    // o estilo é reaplicado por palavra: a borda e os espaços não herdam a cor
+    this.out(this.wordStart + this.word + (this.active() ? OFF : ""));
     this.lineW += w;
     this.word = "";
+    this.wordStart = this.seq();
+  }
+
+  /** Decide o que fazer com a sequência pendente de `*`/`` ` `` olhando o próximo caractere. */
+  private resolve(next: string) {
+    const { ch, n, bol } = this.run;
+    this.run = { ch: "", n: 0, bol: false };
+    const s = this.st;
+    const lit = () => { for (let j = 0; j < n; j++) this.put(ch); };
+    if (ch === "`") {
+      if (n >= 3 && bol) { s.fence = !s.fence; this.restyle(); this.skip = true; return; }
+      if (n <= 2 && !s.fence) { s.k = !s.k; this.restyle(); return; }
+      return lit();
+    }
+    if (n > 3) return lit();
+    const keys: ("b" | "i")[] = n === 1 ? ["i"] : n === 2 ? ["b"] : ["b", "i"];
+    const nextWs = /\s/.test(next), prevWs = /\s/.test(this.prev);
+    if (keys.every((x) => s[x]) && !prevWs) { keys.forEach((x) => (s[x] = false)); this.restyle(); }
+    else if (keys.every((x) => !s[x]) && !nextWs && !/[\p{L}\p{N}]/u.test(this.prev)) { keys.forEach((x) => (s[x] = true)); this.restyle(); }
+    else lit(); // `2 ** 3`, `a*b`, marcador solto: fica literal
+  }
+
+  private feed(ch: string) {
+    if (ch === this.run.ch) { this.run.n++; return; }
+    if (this.run.n) this.resolve(ch);
+    if (this.skip) { if (ch === "\n") this.skip = false; return; }
+    const s = this.st;
+    const tick = ch === "`" && (!s.fence || this.bol);
+    const star = ch === "*" && !s.k && !s.fence;
+    if (tick || star) { this.run = { ch, n: 1, bol: this.bol }; return; }
+    this.put(ch);
+  }
+
+  private put(ch: string) {
+    const blank = this.prev === "\n";
+    this.prev = ch;
+    if (ch === "\n") {
+      this.emitWord();
+      this.bol = true;
+      this.st.k = false; // código inline não atravessa linhas
+      if (blank && !this.st.fence) { this.st.b = false; this.st.i = false; } // linha em branco encerra ênfase aberta
+      this.wordStart = this.seq();
+      this.out((this.lineStart ? c.accent("│") : "") + "\n");
+      this.lineStart = true; this.lineW = 0;
+    } else if (ch === " ") {
+      this.emitWord();
+      if (this.lineStart) { this.out(c.accent("│ ")); this.lineStart = false; }
+      if (this.lineW + 1 > cols() - 2) { this.out("\n"); this.lineStart = true; this.lineW = 0; }
+      else { this.out(" "); this.lineW++; }
+    } else { this.word += ch; this.bol = false; }
   }
 
   /** Texto do modelo em streaming, dentro da caixa, com quebra por palavra e borda em todas as linhas. */
@@ -120,23 +195,15 @@ class UI {
       const label = ` ${NAME} `;
       this.out(c.accent("╭─") + c.bold(c.light(label)) + c.accent("─".repeat(Math.max(2, cols() - label.length - 2))) + "\n");
       this.textOpen = true; this.lineStart = true; this.lineW = 0; this.word = "";
+      this.resetStyle();
     }
-    for (const ch of chunk) {
-      if (ch === "\n") {
-        this.emitWord();
-        this.out((this.lineStart ? c.accent("│") : "") + "\n");
-        this.lineStart = true; this.lineW = 0;
-      } else if (ch === " ") {
-        this.emitWord();
-        if (this.lineStart) { this.out(c.accent("│ ")); this.lineStart = false; }
-        if (this.lineW + 1 > cols() - 2) { this.out("\n"); this.lineStart = true; this.lineW = 0; }
-        else { this.out(" "); this.lineW++; }
-      } else this.word += ch;
-    }
+    for (const ch of chunk) this.feed(ch);
   }
   textEnd() {
     if (!this.textOpen) return;
+    if (this.run.n) this.resolve("\n"); // marcador no fim da resposta: fecha se havia abertura, senão fica literal
     this.emitWord();
+    this.resetStyle();
     if (!this.lineStart) this.out("\n");
     this.out(c.accent("╰" + "─".repeat(cols() - 1)) + "\n");
     this.textOpen = false;

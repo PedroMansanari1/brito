@@ -45,6 +45,12 @@ export const c = {
   rgb: (col: RGB) => fg(col),
 };
 
+/** Estilos do markdown no texto do modelo: **negrito** roxo claro, *itálico* lilás, `código` laranja. */
+export const BOLD = useColor ? `\x1b[1m${fgSeq(palette.light)}` : "";
+export const ITALIC = useColor ? `\x1b[3m${fgSeq(palette.soft)}` : "";
+export const CODE = useColor ? fgSeq(palette.orange) : "";
+export const OFF = useColor ? RESET : "";
+
 export const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
 export const cols = () => Math.max(40, Math.min(process.stdout.columns || 80, 120));
 
