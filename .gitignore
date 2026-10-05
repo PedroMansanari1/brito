@@ -1,0 +1,4 @@
+node_modules
+dist
+.brito/graph.kuzu*
+.DS_Store

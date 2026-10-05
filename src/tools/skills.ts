@@ -1,0 +1,55 @@
+import { z } from "zod";
+import { defineTool } from "./registry.js";
+import { bumpUses, deleteSkill, getSkill, saveSkill, targetScope, validate } from "../skills/store.js";
+
+defineTool({
+  name: "skill_load",
+  description: "Carrega o passo a passo completo de uma skill (listadas no system prompt). Chame ANTES de começar uma tarefa que uma skill cobre e siga-a.",
+  schema: z.object({ name: z.string() }),
+  async run({ name }, ctx) {
+    const s = getSkill(ctx.root, name);
+    if (!s) throw new Error(`Skill não encontrada: ${name}`);
+    bumpUses(ctx.root, name);
+    (ctx.loadedSkills ??= new Set()).add(name);
+    return `# Skill ${s.name} (${s.scope}, v${s.version}, usada ${s.uses + 1}x)\n${s.description}\n\n${s.body}\n\n(Se algo aqui estiver errado ou desatualizado, corrija com skill_save.)`;
+  },
+});
+
+defineTool({
+  name: "skill_save",
+  description:
+    "Cria ou atualiza uma skill: procedimento reutilizável aprendido numa tarefa. Só para padrões GERAIS e repetíveis (como fazer X neste projeto, armadilhas, como verificar) — nunca fatos de uma tarefa única, segredos ou caminhos absolutos. Se já existe skill parecida, ATUALIZE-A (mesmo name) em vez de criar outra. body em markdown: ## Quando usar, ## Passos, ## Armadilhas, ## Verificação.",
+  schema: z.object({
+    name: z.string().describe("kebab-case"),
+    description: z.string().describe("uma frase: QUANDO usar (10–200 chars)"),
+    body: z.string(),
+    refs: z.array(z.string()).default([]).describe("arquivos/símbolos relevantes"),
+    scope: z.enum(["project", "global"]).optional().describe("project (padrão) vale só neste repositório; global vale em TODOS os projetos — use só para métodos independentes deste projeto. Omita ao atualizar: mantém o escopo atual."),
+    reason: z.string().describe("por que vale salvar/alterar (mostrado ao usuário)"),
+  }),
+  dangerous: true,
+  describe: (i, ctx) => {
+    const scope = targetScope(ctx.root, i.name, i.scope);
+    const prev = getSkill(ctx.root, i.name);
+    const tag = scope === "global" ? "GLOBAL (vale em todos os projetos)" : "do projeto";
+    return `${prev && prev.scope === scope ? `ATUALIZAR skill ${tag} ${i.name} (v${prev.version} → v${prev.version + 1})` : `CRIAR skill ${tag} ${i.name}`}\n  quando: ${i.description}\n  motivo: ${i.reason}\n` +
+      i.body.split("\n").slice(0, 12).map((l) => `  │ ${l}`).join("\n") + (i.body.split("\n").length > 12 ? "\n  │ …" : "");
+  },
+  async run({ name, description, body, refs, scope }, ctx) {
+    validate({ name, description, body });
+    const r = saveSkill(ctx.root, { name, description, body, refs }, scope);
+    return r.created ? `Skill ${name} criada (${r.scope}, v1).` : `Skill ${name} atualizada (${r.scope}, v${r.version}); a anterior ficou em history/.`;
+  },
+});
+
+defineTool({
+  name: "skill_delete",
+  description: "Remove uma skill obsoleta ou errada (vai para .brito/skills/.trash).",
+  schema: z.object({ name: z.string(), reason: z.string() }),
+  dangerous: true,
+  describe: (i) => `REMOVER skill ${i.name} — ${i.reason}`,
+  async run({ name }, ctx) {
+    if (!deleteSkill(ctx.root, name)) throw new Error(`Skill não encontrada: ${name}`);
+    return `Skill ${name} removida.`;
+  },
+});

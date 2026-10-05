@@ -1,0 +1,30 @@
+{
+  "name": "brito",
+  "version": "0.1.0",
+  "description": "CLI de agentes para desenvolvimento com grafo de conhecimento do código e da memória",
+  "type": "module",
+  "bin": {
+    "brito": "dist/cli.js"
+  },
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "commander": "latest",
+    "fast-glob": "latest",
+    "kuzu": "latest",
+    "string-width": "^8.3.0",
+    "tree-sitter-wasms": "latest",
+    "web-tree-sitter": "0.24.7",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "tsx": "latest",
+    "typescript": "latest"
+  }
+}
