@@ -15,7 +15,7 @@ import { loadProjectAgents, listAgents } from "./agent/agents.js";
 import { GraphStore } from "./graph/store.js";
 import { indexProject } from "./graph/indexer.js";
 import { Agent, MODEL } from "./agent/loop.js";
-import { EFFORTS, MODEL_ALIASES, MODEL_HELP, initialEffort, isEffort, parseModelArgs, saveEffort, saveModel, type Effort, type ModelScope } from "./model.js";
+import { EFFORTS, MODEL_ALIASES, MODEL_HELP, effortLabel, initialEffort, isEffort, loadReasoningDisplay, parseModelArgs, saveEffort, saveModel, saveReasoningDisplay, type Effort, type ModelScope } from "./model.js";
 import { hasClaudeCli, ClaudeSession } from "./agent/claude-cli.js";
 import { serveMcp } from "./mcp/server.js";
 import "./tools/skills.js";
@@ -129,6 +129,16 @@ async function pickModel(current: string): Promise<{ model: string; scope: Model
   return si === null ? null : { model: models[mi][1], scope: scopes[si].scope };
 }
 
+/** Aplica o nível (vazio = padrão do claude) na sessão e, com `--global`, no config. */
+function applyEffort(level: string, global: boolean, set: (e: string) => void) {
+  set(level);
+  ui.print(`  esforço → ${c.soft(effortLabel(level))}`);
+  if (global) {
+    saveEffort(level ? (level as Effort) : undefined);
+    ui.print(c.muted(level ? "    salvo como padrão (~/.brito/config.json)" : "    esforço salvo removido (~/.brito/config.json)"));
+  }
+}
+
 /** `/effort [nível]` (só claude CLI): sem argumento abre o menu ↑↓+Enter; `--global` grava no config. */
 function effortCommand(get: () => string, set: (e: string) => void) {
   return {
@@ -137,9 +147,10 @@ function effortCommand(get: () => string, set: (e: string) => void) {
       let global = args.includes("--global");
       let level = args.find((a) => !a.startsWith("--"))?.toLowerCase();
       if (!level) {
-        if (!ui.canSelect) { ui.print(`  ${c.soft(get() || "padrão")} ${c.muted(`uso: /effort ${EFFORTS.join("|")} [--global]`)}`); return; }
-        const opts = [{ label: "padrão", hint: "o do claude" }, ...EFFORTS.map((e) => ({ label: e, hint: e === "low" ? "mais barato" : e === "max" ? "mais caro" : "" }))];
-        const i = await ui.select("esforço", opts, get() ? EFFORTS.indexOf(get() as any) + 1 : 0);
+        if (!ui.canSelect) { ui.print(`  ${c.soft(effortLabel(get()))} ${c.muted(`uso: /effort ${EFFORTS.join("|")} [--global]`)}`); return; }
+        const hint: Partial<Record<Effort, string>> = { none: "sem raciocínio", minimal: "envia low", low: "mais barato", max: "mais caro", ultra: "envia max" };
+        const opts = [{ label: "padrão", hint: "o do claude" }, ...EFFORTS.map((e) => ({ label: e, hint: hint[e] ?? "" }))];
+        const i = await ui.select("esforço", opts, get() ? EFFORTS.indexOf(get() as Effort) + 1 : 0);
         if (i === null) { ui.info("cancelado"); return; }
         level = i === 0 ? "" : EFFORTS[i - 1];
         if (level && ui.canSelect) {
@@ -149,12 +160,49 @@ function effortCommand(get: () => string, set: (e: string) => void) {
         }
       } else if (level === "padrao" || level === "padrão") level = "";
       if (level && !isEffort(level)) { ui.warn(`nível inválido: ${level} (${EFFORTS.join(", ")})`); return; }
-      set(level);
-      ui.print(`  esforço → ${c.soft(level || "padrão")}`);
-      if (global) {
-        saveEffort(level ? (level as Effort) : undefined);
-        ui.print(c.muted(level ? "    salvo como padrão (~/.brito/config.json)" : "    esforço salvo removido (~/.brito/config.json)"));
+      applyEffort(level, global, set);
+    },
+  };
+}
+
+/** `/reasoning show|hide|full|clamp`: exibição do raciocínio (sempre grava, como no Hermes). */
+const REASONING_TOGGLES: Record<string, ["show" | "full", boolean, string]> = {
+  ...Object.fromEntries(["show", "on"].map((k) => [k, ["show", true, "raciocínio visível"]])),
+  ...Object.fromEntries(["hide", "off"].map((k) => [k, ["show", false, "raciocínio oculto"]])),
+  ...Object.fromEntries(["full", "all"].map((k) => [k, ["full", true, "raciocínio completo (sem recorte)"]])),
+  ...Object.fromEntries(["clamp", "collapse", "short"].map((k) => [k, ["full", false, "raciocínio recortado em 10 linhas"]])),
+};
+
+/** `/reasoning [nível|show|hide|full|clamp] [--global]`: mesma mecânica do Hermes (nível só na sessão, salvo com --global). */
+function reasoningCommand(get: () => string, set: (e: string) => void) {
+  return {
+    desc: "esforço de raciocínio e exibição (nível|show|hide|full|clamp)",
+    run: async (args: string[]) => {
+      const global = args.includes("--global");
+      const arg = args.find((a) => !a.startsWith("--"))?.toLowerCase();
+      if (!arg) {
+        const { show, full } = ui.reasoning;
+        ui.print(`  ${c.soft("esforço")} ${c.muted(effortLabel(get()))}`);
+        ui.print(`  ${c.soft("exibição")} ${c.muted(`${show ? "visível" : "oculta"} · ${full ? "completo" : "recortado"}`)}`);
+        ui.print(c.muted(`  uso: /reasoning ${EFFORTS.join("|")}|padrão [--global] · show|hide · full|clamp`));
+        return;
       }
+      const toggle = REASONING_TOGGLES[arg];
+      if (toggle) {
+        const [key, value, msg] = toggle;
+        ui.reasoning[key] = value;
+        saveReasoningDisplay({ [key]: value });
+        ui.print(`  ${c.soft(msg)} ${c.muted("(salvo)")}`);
+        if (key === "full" && value && !ui.reasoning.show) ui.print(c.muted("    o raciocínio está oculto: /reasoning show para vê-lo"));
+        return;
+      }
+      const level = ["padrao", "padrão", "default"].includes(arg) ? "" : ["false", "disabled"].includes(arg) ? "none" : arg;
+      if (level && !isEffort(level)) {
+        ui.warn(`argumento desconhecido: ${arg}`);
+        ui.print(c.muted(`  níveis: ${EFFORTS.join(", ")} · exibição: show, hide, full, clamp · escopo: --global`));
+        return;
+      }
+      applyEffort(level, global, set);
     },
   };
 }
@@ -290,6 +338,7 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean) {
 
   const modelCmd = modelCommand(() => session.requestedModel || session.model, (m) => { session.requestedModel = m; session.model = m; }, "(assinatura do claude CLI)");
   session.effort = initialEffort();
+  ui.reasoning = loadReasoningDisplay();
   const unavailable = { desc: "indisponível no modo claude CLI", run: async () => { ui.warn("não está disponível no modo claude CLI"); } };
   const mcpTools = allTools().map((t) => t.name).filter((n) => /^(graph_|skill_)/.test(n) || n === "remember" || n === "recall");
   const backend: ReplBackend = {
@@ -305,6 +354,7 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean) {
     commands: {
       "/model": modelCmd.cmd,
       "/effort": effortCommand(() => session.effort, (e) => { session.effort = e; }),
+      "/reasoning": reasoningCommand(() => session.effort, (e) => { session.effort = e; }),
       "/tools": { desc: "ferramentas do grafo/memória/skills", run: async () => { for (const n of mcpTools) ui.print(`  ${ui.toolLabel(n)}`); } },
       "/index": {
         desc: "reconstrói o grafo do zero",

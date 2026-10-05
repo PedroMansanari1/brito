@@ -52,3 +52,26 @@ test("effort: --global sem nível remove o salvo e BRITO_EFFORT inválido é ign
   assert.equal(initialEffort(), "max");
   delete process.env.BRITO_EFFORT;
 });
+
+test("clampEffort/wireEffort seguem a escada do Hermes", async () => {
+  const { clampEffort, wireEffort, effortLabel } = await import("../src/model.js");
+  assert.equal(clampEffort("minimal"), "low");   // nada mais fraco suportado: o mais fraco
+  assert.equal(clampEffort("ultra"), "max");     // mais fraco mais próximo
+  assert.equal(clampEffort("xhigh"), "xhigh");
+  assert.deepEqual(wireEffort("none"), { thinking: false });
+  assert.deepEqual(wireEffort("ultra"), { effort: "max", thinking: true });
+  assert.deepEqual(wireEffort(""), { thinking: true });
+  assert.equal(effortLabel("ultra"), "ultra (envia max no claude CLI)");
+  assert.equal(effortLabel("high"), "high");
+});
+
+test("exibição do raciocínio persiste em display.* e preserva o resto do config", async () => {
+  const { loadReasoningDisplay, saveReasoningDisplay } = await import("../src/model.js");
+  process.env.BRITO_CONFIG = join(mkdtempSync(join(tmpdir(), "brito-")), "c.json");
+  assert.deepEqual(loadReasoningDisplay(), { show: true, full: false });
+  saveModel("claude-sonnet-5-5");
+  saveReasoningDisplay({ show: false });
+  saveReasoningDisplay({ full: true });
+  assert.deepEqual(loadReasoningDisplay(), { show: false, full: true });
+  assert.equal(loadSavedModel(), "claude-sonnet-5-5");
+});

@@ -6,6 +6,7 @@ import { skillsIndex } from "../skills/store.js";
 import { MCP_NAME, MCP_PREFIX, APPROVE_TOOL } from "../mcp/server.js";
 import { ui } from "../ui/ui.js";
 import { perms } from "../permissions.js";
+import { wireEffort } from "../model.js";
 import type { TurnRecord } from "./loop.js";
 
 // Backend alternativo: delega ao `claude` oficial, que autentica com o /login do usuário.
@@ -112,7 +113,8 @@ export class ClaudeSession {
       "--agents", JSON.stringify(claudeAgents()),
     ];
     if (this.requestedModel) args.push("--model", this.requestedModel);
-    if (this.effort) args.push("--effort", this.effort);
+    const wire = wireEffort(this.effort);
+    if (wire.effort) args.push("--effort", wire.effort);
     // O modo vale por turno: Shift+Tab no REPL muda o próximo turno.
     const mode = { manual: "default", auto: "acceptEdits", plan: "plan", bypass: "bypassPermissions" }[perms.mode];
     args.push("--permission-mode", mode);
@@ -126,7 +128,11 @@ export class ClaudeSession {
   send(text: string): Promise<boolean> {
     return new Promise((resolve) => {
       ui.turnStart();
-      const child = (this.child = spawn("claude", this.args(text), { cwd: this.o.root, stdio: ["ignore", "pipe", "pipe"] }));
+      const child = (this.child = spawn("claude", this.args(text), {
+        cwd: this.o.root, stdio: ["ignore", "pipe", "pipe"],
+        // `/reasoning none`: o claude desliga o raciocínio com MAX_THINKING_TOKENS=0 (não há `--effort none`)
+        env: wireEffort(this.effort).thinking ? process.env : { ...process.env, MAX_THINKING_TOKENS: "0" },
+      }));
       let buf = "", stderr = "", ok = true, interrupted = false;
       const names = new Map<string, { name: string; input: unknown }>();
       const turn: TurnRecord = { messages: [{ role: "user", content: text }], toolCalls: 0, errors: 0, finished: false };
@@ -137,7 +143,8 @@ export class ClaudeSession {
         recordStreamEvent(turn, ev, this.loadedSkills);
         if (ev.type === "assistant") {
           for (const b of ev.message?.content ?? []) {
-            if (b.type === "text" && b.text) { ui.text(b.text); ui.textEnd(); }
+            if (b.type === "thinking" && b.thinking && !ev.parent_tool_use_id) ui.thinking(b.thinking);
+            else if (b.type === "text" && b.text) { ui.text(b.text); ui.textEnd(); }
             else if (b.type === "tool_use") {
               const name = String(b.name).replace(MCP_PREFIX, "");
               names.set(b.id, { name, input: b.input });

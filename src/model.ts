@@ -41,10 +41,63 @@ function saveConfig(patch: Record<string, unknown>): void {
 
 export const saveModel = (model: string) => saveConfig({ model });
 
-/** Níveis de esforço aceitos pelo `claude --effort`; o menor gasta menos token. */
-export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+/**
+ * Escada de esforço do Hermes (EFFORT_LADDER, do mais fraco ao mais forte). `none` desliga o raciocínio;
+ * `minimal` e `ultra` são internos: o claude CLI não os aceita, então `clampEffort` os mapeia.
+ */
+export const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
 export type Effort = (typeof EFFORTS)[number];
 export const isEffort = (s: unknown): s is Effort => (EFFORTS as readonly unknown[]).includes(s);
+
+/** Níveis que o `claude --effort` aceita. */
+export const CLAUDE_EFFORTS: readonly Effort[] = ["low", "medium", "high", "xhigh", "max"];
+
+/**
+ * Igual ao clamp_effort do Hermes: passa direto se suportado; senão o nível suportado MAIS FRACO mais próximo
+ * (nunca escala o custo); se não há mais fraco, o mais fraco suportado. `none` nunca é alvo de degradação.
+ */
+export function clampEffort(requested: Effort, supported: readonly Effort[] = CLAUDE_EFFORTS): Effort {
+  if (supported.includes(requested)) return requested;
+  const rank = (e: Effort) => EFFORTS.indexOf(e);
+  const cands = supported.filter((e) => e !== "none").sort((a, b) => rank(a) - rank(b));
+  if (!cands.length) return requested;
+  const weaker = cands.filter((e) => rank(e) < rank(requested));
+  return weaker.length ? weaker[weaker.length - 1] : cands[0];
+}
+
+/** O que mandar ao claude CLI: `thinking:false` = raciocínio desligado (MAX_THINKING_TOKENS=0), sem `--effort`. */
+export function wireEffort(level: string): { effort?: Effort; thinking: boolean } {
+  if (!isEffort(level)) return { thinking: true };
+  if (level === "none") return { thinking: false };
+  return { effort: clampEffort(level), thinking: true };
+}
+
+/** Rótulo do `/reasoning`: o nível, ou `"<nível> (envia <x> no claude CLI)"` quando ele é remapeado. */
+export function effortLabel(level: string): string {
+  if (!isEffort(level)) return level || "padrão";
+  if (level === "none") return "none (raciocínio desligado)";
+  const sent = clampEffort(level);
+  return sent === level ? level : `${level} (envia ${sent} no claude CLI)`;
+}
+
+/** Exibição do raciocínio (`/reasoning show|hide|full|clamp`); padrão do Hermes: mostrar, recortado. */
+export interface ReasoningDisplay { show: boolean; full: boolean }
+
+export function loadReasoningDisplay(): ReasoningDisplay {
+  try {
+    const d = JSON.parse(readFileSync(configPath(), "utf8"))?.display;
+    return { show: d?.show_reasoning !== false, full: d?.reasoning_full === true };
+  } catch { return { show: true, full: false }; }
+}
+
+export function saveReasoningDisplay(patch: Partial<ReasoningDisplay>): void {
+  let cfg: Record<string, any> = {};
+  try { cfg = JSON.parse(readFileSync(configPath(), "utf8")) ?? {}; } catch { /* config novo ou ilegível */ }
+  const display = { ...(cfg.display ?? {}) };
+  if (patch.show !== undefined) display.show_reasoning = patch.show;
+  if (patch.full !== undefined) display.reasoning_full = patch.full;
+  saveConfig({ display });
+}
 
 export function loadSavedEffort(): Effort | undefined {
   try {

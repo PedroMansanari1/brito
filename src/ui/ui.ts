@@ -18,6 +18,13 @@ const EMOJI: Record<string, string> = {
 const emojiOf = (name: string) => EMOJI[name] ?? (name.startsWith("graph_") ? "🔗" : "🔧");
 
 const fmtMs = (ms: number) => (ms < 1000 ? `${(ms / 1000).toFixed(1)}s` : ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m${Math.round((ms % 60_000) / 1000)}s`);
+/** Duração acumulada: 45.2s · 12m03s · 1h02m. */
+export const fmtDur = (ms: number) => {
+  const s = Math.round(ms / 1000);
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m`;
+};
 export const fmtTokens = (n: number) => (n >= 1_000_000 ? `${(n / 1e6).toFixed(1).replace(/\.0$/, "")}M` : n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}K` : String(n));
 
 /** Primeiro argumento "legível" da chamada, para a linha da tool. */
@@ -25,6 +32,24 @@ function preview(input: unknown): string {
   if (!input || typeof input !== "object") return "";
   const v = Object.values(input as Record<string, unknown>).find((x) => typeof x === "string" && x.length > 0) as string | undefined;
   return v ? v.replace(/\s+/g, " ").slice(0, 60) : "";
+}
+
+const skillName = (input: unknown): string => {
+  const n = (input as { name?: unknown } | null)?.name;
+  return typeof n === "string" ? n : "";
+};
+
+/** Quebra uma linha por palavra em no máximo `w` colunas (palavra maior que `w` fica inteira). */
+function wrapLine(line: string, w: number): string[] {
+  if (stringWidth(line) <= w) return [line];
+  const out: string[] = [];
+  let cur = "";
+  for (const word of line.split(/\s+/).filter(Boolean)) {
+    if (cur && stringWidth(cur) + 1 + stringWidth(word) > w) { out.push(cur); cur = word; }
+    else cur = cur ? `${cur} ${word}` : word;
+  }
+  if (cur) out.push(cur);
+  return out;
 }
 
 class UI {
@@ -39,6 +64,12 @@ class UI {
   private lineStart = true;
   private seed = Math.floor(Math.random() * FACES.length);
   private dock: Dock | null = null;
+  /** soma do tempo de todos os turnos da sessão */
+  private totalMs = 0;
+  /** skill carregada no turno atual (aparece na barra de status) */
+  private activeSkill = "";
+  /** `/reasoning show|hide|full|clamp` */
+  reasoning = { show: true, full: false };
 
   /** Com dock, toda saída vai para cima dele e o spinner mora na linha própria do dock. */
   attachDock(d: Dock | null) { this.dock = d; }
@@ -59,7 +90,7 @@ class UI {
     const secs = (Date.now() - this.t0) / 1000;
     const f = c.light(FRAMES[this.frame % FRAMES.length]);
     if (this.running.size > 0) {
-      const names = [...new Set([...this.running.values()].map((r) => r.name))];
+      const names = [...new Set([...this.running.values()].map((r) => (r.name === "skill_load" && skillName(r.input) ? `skill ${skillName(r.input)}` : r.name)))];
       const what = this.running.size === 1 ? names[0] : `${this.running.size} ferramentas`;
       return `${f} ${c.muted(`executando ${what}…`)} ${c.dim(`(${secs.toFixed(1)}s)`)}`;
     }
@@ -92,11 +123,13 @@ class UI {
   }
   turnEnd(ok = true) {
     this.textEnd();
-    this.busy = false; this.running.clear();
+    this.busy = false; this.running.clear(); this.activeSkill = "";
     if (this.timer) clearInterval(this.timer);
     this.clear();
-    const secs = (Date.now() - this.t0) / 1000;
-    if (ok && this.t0) this.print(c.dim(`${DONE[this.seed % DONE.length]} pronto! (${secs.toFixed(1)}s)`));
+    const ms = this.t0 ? Date.now() - this.t0 : 0;
+    this.t0 = 0;
+    this.totalMs += ms;
+    if (ok && ms) this.print(c.dim(`${DONE[this.seed % DONE.length]} pronto! (${(ms / 1000).toFixed(1)}s · total ${fmtDur(this.totalMs)})`));
   }
   /** Libera o terminal para um prompt interativo (permissão). */
   suspend() { this.paused = true; this.clear(); }
@@ -216,7 +249,11 @@ class UI {
   }
 
   // ---------- ferramentas ----------
-  toolStart(id: string, name: string, input: unknown) { this.running.set(id, { name, input, t0: Date.now() }); this.draw(); }
+  toolStart(id: string, name: string, input: unknown) {
+    this.running.set(id, { name, input, t0: Date.now() });
+    if (name === "skill_load" && skillName(input)) this.activeSkill = skillName(input);
+    this.draw();
+  }
   toolEnd(id: string, isError: boolean) {
     const r = this.running.get(id);
     if (!r) return;
@@ -233,6 +270,24 @@ class UI {
   }
   /** Linha de progresso de um subagente (indentada, com o rótulo dele). */
   sub(label: string, text: string) { this.textEnd(); this.print(`  ${c.accent("┊")} ${c.light(`[${label}]`)} ${text}`); }
+
+  /** Raciocínio do modelo (`/reasoning show`): caixa tênue; recorta em 10 linhas, salvo `/reasoning full`. */
+  thinking(text: string) {
+    if (!this.reasoning.show) return;
+    const body = text.trim();
+    if (!body) return;
+    this.textEnd();
+    const w = cols();
+    const wrapped = body.split("\n").flatMap((l) => wrapLine(l.trimEnd(), w - 4));
+    const MAX = 10;
+    const cut = !this.reasoning.full && wrapped.length > MAX;
+    const lines = cut ? wrapped.slice(0, MAX) : wrapped;
+    const label = " raciocínio ";
+    this.print(c.dim(`┌─${label}${"─".repeat(Math.max(0, w - 3 - label.length))}┐`));
+    for (const l of lines) this.print(c.dim(`│ ${l}`));
+    if (cut) this.print(c.dim(`│ … +${wrapped.length - MAX} linhas (/reasoning full mostra tudo)`));
+    this.print(c.dim(`└${"─".repeat(w - 2)}┘`));
+  }
 
   info(msg: string) { this.textEnd(); this.print(c.muted(msg)); }
   warn(msg: string) { this.textEnd(); this.print(c.rgb(palette.warn)(msg)); }
@@ -251,6 +306,7 @@ class UI {
     const colour = pct >= 95 ? c.err : pct >= 80 ? c.rgb(palette.orange) : pct >= 50 ? c.warn : c.ok;
     const bar = colour("█".repeat(filled)) + c.dim("░".repeat(slots - filled));
     const mins = Math.floor((Date.now() - s.startedAt) / 60_000);
+    const active = this.totalMs + (this.busy && this.t0 ? Date.now() - this.t0 : 0);
     const label = (t: string) => c.dim(t + " ");
     // Taxa de acerto do cache de prompt (quanto mais alta, mais barato): só aparece quando há dado, como no Hermes.
     const hit = s.cacheRead && s.input > 0 ? Math.min(100, (s.cacheRead / s.input) * 100) : undefined;
@@ -264,7 +320,8 @@ class UI {
       ...(hit !== undefined ? [[2, label("cache") + hitColour(`◎ ${Math.round(hit)}%`)] as [number, string]] : []),
       [3, label("tokens") + c.muted(`↑${fmtTokens(s.input)} ↓${fmtTokens(s.output)}`)],
       ...(s.cost !== undefined ? [[1, label("custo") + c.muted(`$${s.cost.toFixed(2)}`)] as [number, string]] : []),
-      [4, label("tempo") + c.muted(mins < 1 ? "<1m" : `${mins}m`)],
+      ...(this.activeSkill ? [[1, c.light("🎓 ") + label("skill") + c.bold(c.soft(this.activeSkill))] as [number, string]] : []),
+      [4, label("tempo") + c.muted(mins < 1 ? "<1m" : `${mins}m`) + (active >= 1000 ? c.dim(` (ativo ${fmtDur(active)})`) : "")],
       ...(s.extra ? [[5, c.muted(s.extra)] as [number, string]] : []),
     ];
     const sep = c.accent(" │ ");
@@ -284,7 +341,8 @@ class UI {
       ["cache", "% do prompt reaproveitado do cache (◎). Alto (verde) = respostas mais rápidas e baratas. Some enquanto não há dado."],
       ["tokens", "total da sessão: ↑ enviados ao modelo (inclui cache) · ↓ gerados por ele."],
       ["custo", "gasto estimado da sessão em dólares."],
-      ["tempo", "há quanto tempo a sessão está aberta."],
+      ["tempo", "há quanto tempo a sessão está aberta · (ativo) soma do tempo gasto em todos os turnos."],
+      ["skill", "skill carregada (skill_load) no turno em andamento."],
     ].map(([k, v]) => `  ${c.soft(k.padEnd(9))} ${c.muted(v)}`);
   }
 
