@@ -60,6 +60,8 @@ export class Dock {
   private pasteBuf = "";
   private menuSel = 0;
 
+  private picker: { title: string; options: { label: string; hint?: string }[]; sel: number; done: (i: number | null) => void } | null = null;
+
   private dsr?: (row: number, col: number) => void;
   private started = false;
   private onData = (d: string) => this.feed(d);
@@ -165,6 +167,20 @@ export class Dock {
   setBusy(b: boolean) { this.busy = b; if (this.started) process.stdout.write(this.paintSeq(false)); }
   /** Troca o prompt (ex.: pergunta de permissão). null restaura o padrão. */
   setPrompt(p: string | null) { this.promptOverride = p; if (this.started) process.stdout.write(this.paintSeq(false)); }
+  /** Menu de escolha no lugar da caixa de entrada: ↑↓ navegam, Enter confirma, Esc/Ctrl+C cancelam. */
+  select(title: string, options: { label: string; hint?: string }[], current = 0): Promise<number | null> {
+    return new Promise((resolve) => {
+      this.picker = { title, options, sel: Math.max(0, Math.min(current, options.length - 1)), done: resolve };
+      this.repaint();
+    });
+  }
+  private closePicker(i: number | null) {
+    const p = this.picker;
+    if (!p) return;
+    this.picker = null;
+    this.repaint();
+    p.done(i);
+  }
   hasText() { return this.buf.length > 0; }
   clearInput() { this.buf = []; this.cur = 0; this.hIdx = -1; this.menuSel = 0; this.repaint(); }
   repaint() { if (this.started) process.stdout.write(this.paintSeq(false)); }
@@ -219,6 +235,17 @@ export class Dock {
     if (this.spinner) out.push(this.spinner);
     out.push(this.opts.status());
     const rule = c.accent("─".repeat(this.cols));
+    if (this.picker) {
+      const p = this.picker;
+      out.push(rule, c.bold(c.light(" " + p.title)));
+      const w = Math.max(...p.options.map((o) => o.label.length));
+      p.options.forEach((o, k) => {
+        const row = ` ${o.label.padEnd(w)}${o.hint ? "  " + o.hint : ""}`;
+        out.push(k === p.sel ? c.bold(c.light("▸" + row)) : c.muted(" " + row));
+      });
+      out.push(c.dim(" ↑↓ escolhe · Enter confirma · Esc cancela"));
+      return { out, cursor: { row: out.length, col: 1 } };
+    }
     out.push(rule);
     const inputStart = out.length;
     for (let k = 0; k < visible; k++) {
@@ -272,7 +299,18 @@ export class Dock {
   }
 
   // ---------------------------------------------------------------- entrada
+  private feedPicker(data: string) {
+    const p = this.picker!;
+    const n = p.options.length;
+    if (/^\x1b\[[AB]|^\x1bO[AB]/.test(data) || data === "k" || data === "j") {
+      p.sel = (p.sel + (data.endsWith("A") || data === "k" ? -1 : 1) + n) % n;
+      this.repaint();
+    } else if (data === "\r" || data === "\n") this.closePicker(p.sel);
+    else if (data === "\x1b" || data === "\x03") this.closePicker(null);
+  }
+
   private feed(data: string) {
+    if (this.picker) { this.feedPicker(data); return; }
     let i = 0;
     while (i < data.length) {
       if (this.pasting) {

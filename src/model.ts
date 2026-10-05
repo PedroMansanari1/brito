@@ -31,13 +31,36 @@ export function loadSavedModel(): string | undefined {
   } catch { return undefined; }
 }
 
-/** Grava `model` no config global preservando as demais chaves. */
-export function saveModel(model: string): void {
+/** Grava `patch` no config global preservando as demais chaves. */
+function saveConfig(patch: Record<string, unknown>): void {
   let cfg: Record<string, unknown> = {};
   try { cfg = JSON.parse(readFileSync(configPath(), "utf8")) ?? {}; } catch { /* config novo ou ilegível */ }
   mkdirSync(dirname(configPath()), { recursive: true });
-  writeFileSync(configPath(), JSON.stringify({ ...cfg, model }, null, 2) + "\n");
+  writeFileSync(configPath(), JSON.stringify({ ...cfg, ...patch }, null, 2) + "\n");
 }
+
+export const saveModel = (model: string) => saveConfig({ model });
+
+/** Níveis de esforço aceitos pelo `claude --effort`; o menor gasta menos token. */
+export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type Effort = (typeof EFFORTS)[number];
+export const isEffort = (s: unknown): s is Effort => (EFFORTS as readonly unknown[]).includes(s);
+
+export function loadSavedEffort(): Effort | undefined {
+  try {
+    const e = JSON.parse(readFileSync(configPath(), "utf8"))?.effort;
+    return isEffort(e) ? e : undefined;
+  } catch { return undefined; }
+}
+
+/** `undefined` remove o esforço salvo (volta ao padrão do claude). */
+export const saveEffort = (effort: Effort | undefined) => saveConfig({ effort });
+
+/** Prioridade: BRITO_EFFORT (válido) > config global > padrão (""). */
+export const initialEffort = (): string => {
+  const env = process.env.BRITO_EFFORT?.trim().toLowerCase();
+  return (isEffort(env) ? env : undefined) ?? loadSavedEffort() ?? "";
+};
 
 /** Prioridade: BRITO_MODEL > config global > padrão. */
 export const initialModel = () => process.env.BRITO_MODEL ?? loadSavedModel() ?? DEFAULT_MODEL;

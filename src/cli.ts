@@ -15,7 +15,7 @@ import { loadProjectAgents, listAgents } from "./agent/agents.js";
 import { GraphStore } from "./graph/store.js";
 import { indexProject } from "./graph/indexer.js";
 import { Agent, MODEL } from "./agent/loop.js";
-import { MODEL_HELP, parseModelArgs, saveModel } from "./model.js";
+import { EFFORTS, MODEL_ALIASES, MODEL_HELP, initialEffort, isEffort, parseModelArgs, saveEffort, saveModel, type Effort, type ModelScope } from "./model.js";
 import { hasClaudeCli, ClaudeSession } from "./agent/claude-cli.js";
 import { serveMcp } from "./mcp/server.js";
 import "./tools/skills.js";
@@ -115,6 +115,50 @@ function startApprovalServer(io: { ask: (q: string, opts?: { force?: boolean }) 
   return { path: sock, close };
 }
 
+/** Menus ↑↓+Enter do `/model`: modelo e depois escopo. null = cancelado. */
+async function pickModel(current: string): Promise<{ model: string; scope: ModelScope } | null> {
+  const models = Object.entries(MODEL_ALIASES);
+  const mi = await ui.select("modelo", models.map(([alias, id]) => ({ label: alias, hint: id === current ? `${id} (atual)` : id })), Math.max(0, models.findIndex(([, id]) => id === current)));
+  if (mi === null) return null;
+  const scopes: { scope: ModelScope; label: string; hint: string }[] = [
+    { scope: "session", label: "esta sessão", hint: "vale até fechar o Brito" },
+    { scope: "global", label: "sempre", hint: "grava em ~/.brito/config.json" },
+    { scope: "once", label: "só o próximo turno", hint: "depois volta ao modelo atual" },
+  ];
+  const si = await ui.select(`escopo para ${models[mi][0]}`, scopes);
+  return si === null ? null : { model: models[mi][1], scope: scopes[si].scope };
+}
+
+/** `/effort [nível]` (só claude CLI): sem argumento abre o menu ↑↓+Enter; `--global` grava no config. */
+function effortCommand(get: () => string, set: (e: string) => void) {
+  return {
+    desc: "nível de esforço do modelo (low gasta menos token)",
+    run: async (args: string[]) => {
+      let global = args.includes("--global");
+      let level = args.find((a) => !a.startsWith("--"))?.toLowerCase();
+      if (!level) {
+        if (!ui.canSelect) { ui.print(`  ${c.soft(get() || "padrão")} ${c.muted(`uso: /effort ${EFFORTS.join("|")} [--global]`)}`); return; }
+        const opts = [{ label: "padrão", hint: "o do claude" }, ...EFFORTS.map((e) => ({ label: e, hint: e === "low" ? "mais barato" : e === "max" ? "mais caro" : "" }))];
+        const i = await ui.select("esforço", opts, get() ? EFFORTS.indexOf(get() as any) + 1 : 0);
+        if (i === null) { ui.info("cancelado"); return; }
+        level = i === 0 ? "" : EFFORTS[i - 1];
+        if (level && ui.canSelect) {
+          const g = await ui.select(`escopo para ${level}`, [{ label: "esta sessão" }, { label: "sempre", hint: "grava em ~/.brito/config.json" }]);
+          if (g === null) { ui.info("cancelado"); return; }
+          if (g === 1) global = true;
+        }
+      } else if (level === "padrao" || level === "padrão") level = "";
+      if (level && !isEffort(level)) { ui.warn(`nível inválido: ${level} (${EFFORTS.join(", ")})`); return; }
+      set(level);
+      ui.print(`  esforço → ${c.soft(level || "padrão")}`);
+      if (global) {
+        saveEffort(level ? (level as Effort) : undefined);
+        ui.print(c.muted(level ? "    salvo como padrão (~/.brito/config.json)" : "    esforço salvo removido (~/.brito/config.json)"));
+      }
+    },
+  };
+}
+
 /**
  * `/model [nome|alias] [--global|--session|--once]` (mesma semântica do Hermes). Vale para os dois backends:
  * `get`/`set` leem e trocam o modelo vivo; `--once` devolve o anterior depois do turno (`restoreOnce`).
@@ -128,7 +172,13 @@ function modelCommand(get: () => string, set: (m: string) => void, note: string)
       run: async (args: string[]) => {
         const req = parseModelArgs(args.join(" "));
         if (req.errors.length) { for (const e of req.errors) ui.warn(e); return; }
-        if (!req.model) { ui.print(`  ${c.soft(get())} ${c.muted(note)}\n  ${c.muted(MODEL_HELP)}`); return; }
+        if (!req.model) {
+          if (!ui.canSelect) { ui.print(`  ${c.soft(get())} ${c.muted(note)}\n  ${c.muted(MODEL_HELP)}`); return; }
+          const picked = await pickModel(get());
+          if (!picked) { ui.info("cancelado"); return; }
+          req.model = picked.model;
+          req.scope = picked.scope;
+        }
         const old = get();
         if (req.scope === "once") restore ??= old; // dois --once seguidos devolvem o modelo original, não o intermediário
         set(req.model);
@@ -239,6 +289,7 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean) {
   }
 
   const modelCmd = modelCommand(() => session.requestedModel || session.model, (m) => { session.requestedModel = m; session.model = m; }, "(assinatura do claude CLI)");
+  session.effort = initialEffort();
   const unavailable = { desc: "indisponível no modo claude CLI", run: async () => { ui.warn("não está disponível no modo claude CLI"); } };
   const mcpTools = allTools().map((t) => t.name).filter((n) => /^(graph_|skill_)/.test(n) || n === "remember" || n === "recall");
   const backend: ReplBackend = {
@@ -253,6 +304,7 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean) {
     reset: () => session.reset(),
     commands: {
       "/model": modelCmd.cmd,
+      "/effort": effortCommand(() => session.effort, (e) => { session.effort = e; }),
       "/tools": { desc: "ferramentas do grafo/memória/skills", run: async () => { for (const n of mcpTools) ui.print(`  ${ui.toolLabel(n)}`); } },
       "/index": {
         desc: "reconstrói o grafo do zero",

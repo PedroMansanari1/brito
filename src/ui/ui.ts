@@ -42,6 +42,11 @@ class UI {
 
   /** Com dock, toda saída vai para cima dele e o spinner mora na linha própria do dock. */
   attachDock(d: Dock | null) { this.dock = d; }
+  /** Menu com setas + Enter (Esc cancela). Sem dock devolve null. */
+  select(title: string, options: { label: string; hint?: string }[], current = 0) {
+    return this.dock ? this.dock.select(title, options, current) : Promise.resolve(null);
+  }
+  get canSelect() { return this.dock !== null; }
   private out(s: string) { if (this.dock) this.dock.write(s); else process.stdout.write(s); }
 
   // ---------- baixo nível ----------

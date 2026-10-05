@@ -76,6 +76,8 @@ export class ClaudeSession {
   model = "claude (assinatura)";
   /** modelo pedido via `/model` (--model do claude); vazio = padrão da assinatura */
   requestedModel = "";
+  /** esforço pedido via `/effort` (--effort do claude); vazio = padrão */
+  effort = "";
   /** prompt da última chamada à API da thread principal = tamanho atual do contexto (como o Hermes) */
   contextTokens = 0;
   /** janela real do modelo, informada pelo claude no evento `result` */
@@ -110,6 +112,7 @@ export class ClaudeSession {
       "--agents", JSON.stringify(claudeAgents()),
     ];
     if (this.requestedModel) args.push("--model", this.requestedModel);
+    if (this.effort) args.push("--effort", this.effort);
     // O modo vale por turno: Shift+Tab no REPL muda o próximo turno.
     const mode = { manual: "default", auto: "acceptEdits", plan: "plan", bypass: "bypassPermissions" }[perms.mode];
     args.push("--permission-mode", mode);
