@@ -11,6 +11,23 @@ async function drain(r: any, read = true): Promise<Row[]> {
   finally { for (const x of all) x.close(); }
 }
 
+/** Outro processo do Brito está com o banco aberto: o Kùzu só deixa um processo por projeto. */
+export class GraphLockedError extends Error {
+  constructor(file: string) {
+    super(
+      `O grafo deste projeto está em uso por outro processo do Brito (${file}).\n` +
+      "O banco aceita um processo por vez: provavelmente há outro terminal com o Brito, ou uma sessão do Claude Code usando o Brito, neste mesmo diretório.\n" +
+      "Feche o outro, ou espere o turno em andamento terminar, e tente de novo.",
+    );
+    this.name = "GraphLockedError";
+  }
+}
+
+const isLockError = (e: unknown) => /could not set lock/i.test(String((e as Error)?.message ?? e));
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Quanto esperar o banco liberar antes de desistir: cobre sobreposições curtas (a reflexão de skills e o turno, por exemplo). */
+const LOCK_WAIT_MS = 4000;
+
 export class GraphStore {
   private db: kuzu.Database;
   private conn: kuzu.Connection;
@@ -21,13 +38,23 @@ export class GraphStore {
     this.conn = conn;
   }
 
-  static async open(root: string): Promise<GraphStore> {
+  static async open(root: string, waitMs = LOCK_WAIT_MS): Promise<GraphStore> {
     const dir = path.join(root, ".brito");
     fs.mkdirSync(dir, { recursive: true });
-    const db = new kuzu.Database(path.join(dir, "graph.kuzu"));
-    const store = new GraphStore(db, new kuzu.Connection(db));
-    await store.migrate();
-    return store;
+    const file = path.join(dir, "graph.kuzu");
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+      try {
+        const db = new kuzu.Database(file);
+        const store = new GraphStore(db, new kuzu.Connection(db));
+        await store.migrate();
+        return store;
+      } catch (e) {
+        if (!isLockError(e)) throw e;
+        if (Date.now() >= deadline) throw new GraphLockedError(file);
+        await sleep(250);
+      }
+    }
   }
 
   private async migrate() {

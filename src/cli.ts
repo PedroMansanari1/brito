@@ -12,7 +12,7 @@ import os from "node:os";
 import fs from "node:fs";
 import { PLAN_NOTE, perms, describeClaudeTool } from "./permissions.js";
 import { loadProjectAgents, listAgents } from "./agent/agents.js";
-import { GraphStore } from "./graph/store.js";
+import { GraphLockedError, GraphStore } from "./graph/store.js";
 import { indexProject } from "./graph/indexer.js";
 import { Agent, MODEL } from "./agent/loop.js";
 import { EFFORTS, MODEL_ALIASES, MODEL_HELP, effortLabel, initialEffort, isEffort, loadReasoningDisplay, parseModelArgs, saveEffort, saveModel, saveReasoningDisplay, type Effort, type ModelScope } from "./model.js";
@@ -472,4 +472,7 @@ program
     });
   });
 
-program.parseAsync();
+program.parseAsync().catch((e) => {
+  if (e instanceof GraphLockedError) { console.error(c.err("✗ ") + e.message); process.exit(1); }
+  throw e;
+});
