@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 — 2026-10-11
+
+### Changed
+- New startup banner: the name BRITO over a web (rings, spokes and nodes — half spider web, half graph) generated at runtime. On windows of 95+ columns and 28+ rows the web fills the whole terminal with the panel on top; smaller windows keep the compact banner with a small web, and narrow ones only the panel. `BRITO_BANNER=compact|full` overrides it. Purple tones only (follows `BRITO_COLOR`), fading from light at the center to dark at the edge.
+
 ## 0.3.0 — 2026-10-11
 
 ### Changed

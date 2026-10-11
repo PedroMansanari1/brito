@@ -133,13 +133,13 @@ Brito has **no database drivers and connects to nothing on its own**. When it ne
 
 ## Configuration
 
-`BRITO_MODEL`, `BRITO_EFFORT`, `BRITO_EXPLORE_MODEL`, `BRITO_LEARN_MODEL`, `BRITO_HOME` (where global skills and history live), `BRITO_CONFIG`, `BRITO_COLOR`, `BRITO_INDEX_IGNORED`, `BRITO_SKILL_MIN_TOOLS` (how long a turn must be to trigger reflection when nothing else does).
+`BRITO_MODEL`, `BRITO_EFFORT`, `BRITO_EXPLORE_MODEL`, `BRITO_LEARN_MODEL`, `BRITO_HOME` (where global skills and history live), `BRITO_CONFIG`, `BRITO_COLOR`, `BRITO_BANNER` (`compact` or `full`; default: full screen on windows of 95+ columns and 28+ rows), `BRITO_INDEX_IGNORED`, `BRITO_SKILL_MIN_TOOLS` (how long a turn must be to trigger reflection when nothing else does).
 
 Project data lives in `.brito/` (graph, project skills, agents) and global data in `~/.brito`. The graph, memory and skills stay on your machine; as with any coding agent, the code the model reads is sent to the model provider you configured.
 
 ## Limitations
 
-- Early software (v0.3.0), one maintainer.
+- Early software (v0.3.1), one maintainer.
 - **The interface and the agent's default language are Brazilian Portuguese.** Translating them is a welcome contribution.
 - Skill learning is a heuristic: it proposes, you decide. Expect some proposals to be rejected.
 

@@ -133,13 +133,13 @@ O Brito **não tem drivers de banco e não se conecta a nada sozinho**. Quando p
 
 ## Configuração
 
-`BRITO_MODEL`, `BRITO_EFFORT`, `BRITO_EXPLORE_MODEL`, `BRITO_LEARN_MODEL`, `BRITO_HOME` (onde ficam skills globais e histórico), `BRITO_CONFIG`, `BRITO_COLOR`, `BRITO_INDEX_IGNORED`, `BRITO_SKILL_MIN_TOOLS` (tamanho mínimo do turno para disparar a reflexão quando nada mais dispara).
+`BRITO_MODEL`, `BRITO_EFFORT`, `BRITO_EXPLORE_MODEL`, `BRITO_LEARN_MODEL`, `BRITO_HOME` (onde ficam skills globais e histórico), `BRITO_CONFIG`, `BRITO_COLOR`, `BRITO_BANNER` (`compact` ou `full`; padrão: tela cheia em janelas de 95+ colunas e 28+ linhas), `BRITO_INDEX_IGNORED`, `BRITO_SKILL_MIN_TOOLS` (tamanho mínimo do turno para disparar a reflexão quando nada mais dispara).
 
 Os dados do projeto ficam em `.brito/` (grafo, skills do projeto, agentes) e os globais em `~/.brito`. O grafo, a memória e as skills ficam na sua máquina; como em qualquer agente de código, o código que o modelo lê é enviado ao provedor de modelo que você configurou.
 
 ## Limitações
 
-- Software em fase inicial (v0.3.0), um mantenedor.
+- Software em fase inicial (v0.3.1), um mantenedor.
 - **A interface e o idioma padrão do agente são português do Brasil.** Traduzi-los é uma contribuição bem-vinda.
 - O aprendizado de skills é heurístico: ele propõe, você decide. Espere rejeitar algumas propostas.
 

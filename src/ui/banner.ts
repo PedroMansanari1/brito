@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import stringWidth from "string-width";
-import { c, cols, mix, palette, stripAnsi, truncAnsi } from "./theme.js";
+import { c, cols, stripAnsi, truncAnsi } from "./theme.js";
+import { LOGO, WEB_W, overlayText, serialize, stampLogo, webCanvas, webLogo } from "./web-art.js";
 
 export interface BannerInfo {
   name: string;
@@ -14,23 +15,6 @@ export interface BannerInfo {
   skills: { name: string; scope: string }[];
   agents: string[];
 }
-
-const LOGO = [
-  "████  ████  █████ █████  ███ ",
-  "█   █ █   █   █     █   █   █",
-  "████  ████    █     █   █   █",
-  "█   █ █  █    █     █   █   █",
-  "████  █   █ █████   █    ███ ",
-];
-
-/** Arte do lado esquerdo: um pequeno grafo, a identidade do Brito. */
-const HERO = [
-  "   ◉───────◉───────◉   ",
-  "   │ \\   / │ \\   / │   ",
-  "   │  ◉────◉───◉  │   ",
-  "   │ /   \\ │ /   \\ │   ",
-  "   ◉───────◉───────◉   ",
-];
 
 const GROUPS: [string, (n: string) => boolean][] = [
   ["arquivos", (n) => ["read_file", "write_file", "edit_file", "glob", "grep"].includes(n)],
@@ -62,7 +46,56 @@ function listLine(label: string, items: string[], width: number): string {
   return head + c.soft(shown.join(", ")) + (rest > 0 ? c.dim(`  +${rest}`) : "");
 }
 
+/** Linhas livres embaixo da janela: moldura (2) + dock com status e prompt. */
+const BELOW_BANNER = 7;
+const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
+
+/** BRITO_BANNER=compact força o banner pequeno; =full força a tela cheia; sem nada, é tela cheia em janela grande. */
+function wantsFull(): boolean {
+  const mode = process.env.BRITO_BANNER;
+  if (mode === "compact") return false;
+  if (mode === "full") return true;
+  return (process.stdout.rows ?? 0) >= 28 && cols() >= 95;
+}
+
+/** Tela cheia: a teia ocupa a janela inteira, com o nome no centro e o painel por cima. */
+function renderFull(i: BannerInfo): string {
+  const total = cols();
+  const inner = total - 4;
+  const rows = process.stdout.rows || 30;
+  const h = Math.max(20, rows - BELOW_BANNER);
+  const grid = webCanvas(inner, h, { rings: h >= 26 ? 4 : 3, spokes: inner >= 120 ? 16 : 12 });
+
+  const blockW = Math.min(inner - 4, 72);
+  const home = process.env.HOME ?? "\0";
+  const info: string[] = [
+    truncAnsi(`${c.soft(i.model)} ${c.dim("·")} ${c.muted(`${fmtK(i.ctxWindow)} ctx`)} ${c.dim("·")} ${c.muted(i.dir.replace(home, "~"))} ${c.dim("·")} ${c.dim(`sessão ${i.session}`)}`, blockW),
+    "",
+  ];
+  for (const [label, test] of GROUPS) {
+    const names = i.tools.filter(test);
+    if (names.length) info.push(listLine(label, names, blockW));
+  }
+  info.push(c.muted("subagentes: ") + c.soft(i.agents.join(", ") || "—"));
+  const project = i.skills.filter((s) => s.scope === "project").map((s) => s.name);
+  const global = i.skills.filter((s) => s.scope === "global").map((s) => s.name);
+  if (project.length) info.push(listLine("skills do projeto", project, blockW));
+  if (global.length) info.push(listLine("skills globais", global, blockW));
+  if (!i.skills.length) info.push(c.muted("skills: ") + c.dim("nenhuma ainda · nascem sozinhas após tarefas complexas"));
+  info.push("", c.dim(`${i.tools.length} tools · ${i.skills.length} ${i.skills.length === 1 ? "skill" : "skills"} · ${i.symbols} símbolos · ${i.notes} notas · /help`));
+
+  const top = Math.max(0, Math.floor((h - (LOGO.length + 1 + info.length)) / 2));
+  stampLogo(grid, Math.floor((inner - LOGO[0].length) / 2), top);
+  const x0 = Math.floor((inner - blockW) / 2);
+  info.forEach((l, k) => overlayText(grid, x0, top + LOGO.length + 1 + k, l));
+
+  const title = ` ${i.name} v${version()} `;
+  const head = c.accent("╭─") + c.bold(c.light(title)) + c.accent("─".repeat(Math.max(1, total - title.length - 3)) + "╮");
+  return [head, ...serialize(grid).map((r) => c.accent("│ ") + r + c.accent(" │")), c.accent("╰" + "─".repeat(total - 2) + "╯")].join("\n");
+}
+
 export function renderBanner(i: BannerInfo): string {
+  if (wantsFull()) return renderFull(i);
   const total = Math.min(cols(), 110);
   const wide = total >= 95;
   const inner = total - 4;
@@ -74,16 +107,11 @@ export function renderBanner(i: BannerInfo): string {
     c.dim(`sessão ${i.session}`),
   ];
 
-  const leftW = wide ? Math.max(LOGO[0].length, HERO[0].length) + 2 : inner;
+  const leftW = wide ? WEB_W + 2 : inner;
   const rightW = wide ? inner - leftW - 3 : inner;
 
   const left: string[] = [];
-  if (wide) {
-    LOGO.forEach((l, k) => left.push(c.rgb(mix(palette.accent, palette.soft, k / (LOGO.length - 1)))(l)));
-    left.push("");
-    HERO.forEach((l) => left.push(l.replace(/[◉]/g, (m) => c.light(m)).replace(/[─│\\/]/g, (m) => c.accent(m))));
-    left.push("");
-  }
+  if (wide) left.push(...webLogo(), "");
   left.push(...context);
 
   const right: string[] = [c.bold(c.light("Ferramentas disponíveis"))];
