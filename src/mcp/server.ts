@@ -66,7 +66,7 @@ export async function serveMcp(root: string): Promise<void> {
     sync: async () => { await indexProject(root, graph); },
   };
 
-  const server = new Server({ name: MCP_NAME, version: "0.2.0" }, { capabilities: { tools: {} }, instructions: MCP_INSTRUCTIONS });
+  const server = new Server({ name: MCP_NAME, version: "0.3.0" }, { capabilities: { tools: {} }, instructions: MCP_INSTRUCTIONS });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [{
       name: APPROVE_TOOL,

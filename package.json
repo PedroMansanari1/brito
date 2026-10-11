@@ -1,6 +1,6 @@
 {
   "name": "brito-cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Coding-agent CLI with a code knowledge graph, memory and reviewable skills / CLI de agente de código com grafo de conhecimento, memória e skills revisáveis",
   "type": "module",
   "bin": {
@@ -31,7 +31,7 @@
     "tsx": "latest",
     "typescript": "latest"
   },
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/wilsonbrito/brito.git"

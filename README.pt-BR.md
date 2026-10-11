@@ -139,7 +139,7 @@ Os dados do projeto ficam em `.brito/` (grafo, skills do projeto, agentes) e os 
 
 ## Limitações
 
-- Software em fase inicial (v0.2.0), um mantenedor.
+- Software em fase inicial (v0.3.0), um mantenedor.
 - **A interface e o idioma padrão do agente são português do Brasil.** Traduzi-los é uma contribuição bem-vinda.
 - O aprendizado de skills é heurístico: ele propõe, você decide. Espere rejeitar algumas propostas.
 
@@ -164,4 +164,4 @@ npm test             # 190+ testes, incluindo um servidor MCP real e um REPL rea
 
 ## Licença
 
-[MIT](LICENSE)
+[PolyForm Noncommercial 1.0.0](LICENSE): uso, estudo e modificação livres para qualquer fim não comercial (uso pessoal, pesquisa, educação, hobby, ONGs). Uso comercial não é permitido. É código disponível (source-available), não open source pela definição da OSI. Precisa de licença comercial? Abra uma issue.

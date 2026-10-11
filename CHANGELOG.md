@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.0 — 2026-10-11
+
+### Changed
+- **License changed from MIT to [PolyForm Noncommercial 1.0.0](LICENSE).** Free for personal, research, educational and other noncommercial use; commercial use is not permitted. Versions up to and including 0.2.0 were released under MIT.
+
 ## 0.2.0 — 2026-10-11
 
 ### Packaging

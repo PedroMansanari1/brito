@@ -139,7 +139,7 @@ Project data lives in `.brito/` (graph, project skills, agents) and global data 
 
 ## Limitations
 
-- Early software (v0.2.0), one maintainer.
+- Early software (v0.3.0), one maintainer.
 - **The interface and the agent's default language are Brazilian Portuguese.** Translating them is a welcome contribution.
 - Skill learning is a heuristic: it proposes, you decide. Expect some proposals to be rejected.
 
@@ -164,4 +164,4 @@ npm test             # 190+ tests, including a real MCP server and a real REPL
 
 ## License
 
-[MIT](LICENSE)
+[PolyForm Noncommercial 1.0.0](LICENSE): free to use, study and modify for any noncommercial purpose (personal use, research, education, hobby, nonprofits). Commercial use is not permitted. This is source-available, not OSI open source. Need a commercial license? Open an issue.
