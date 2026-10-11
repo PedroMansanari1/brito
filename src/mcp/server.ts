@@ -19,7 +19,7 @@ export const MCP_NAME = "brito";
 export const MCP_INSTRUCTIONS = [
   "Brito: grafo de código, memória e skills do projeto.",
   "- Para localizar código, use graph_search/graph_context antes de ler arquivos; antes de alterar, meça o impacto com graph_callers/graph_impact. O grafo se atualiza sozinho após edições (graph_index só força).",
-  `- O grafo cobre ${INDEXED_EXTENSIONS.join(", ")} (em .svelte/.vue/.astro, o script e as chamadas do template). Imports relativos e por alias (paths/baseUrl do tsconfig, imports do package.json, $lib do SvelteKit) viram arestas. Outras linguagens e arquivos ignorados pelo .gitignore não entram: use busca de texto para eles.`,
+  `- O grafo cobre ${INDEXED_EXTENSIONS.join(", ")} (em .svelte/.vue/.astro, o script e as chamadas do template). Imports relativos e por alias (paths/baseUrl do tsconfig, imports do package.json, $lib do SvelteKit) viram arestas. Em Java, Kotlin, Go, Ruby, PHP, C# e Rust os imports são resolvidos pelo pacote/namespace/módulo e o receptor de uma chamada é casado com o tipo pelo nome (sem inferência de tipos). Outras linguagens e arquivos ignorados pelo .gitignore não entram: use busca de texto para eles.`,
   "- recall/remember: notas duráveis (decisões, convenções, bugs descobertos). Consulte recall ao começar uma tarefa.",
   "- skill_load: carregue a skill antes de uma tarefa que ela cobre. No modo \"tudo liberado\", skill_save vira proposta pendente que o usuário aprova com /skills approve.",
 ].join("\n");
@@ -66,7 +66,7 @@ export async function serveMcp(root: string): Promise<void> {
     sync: async () => { await indexProject(root, graph); },
   };
 
-  const server = new Server({ name: MCP_NAME, version: "0.1.0" }, { capabilities: { tools: {} }, instructions: MCP_INSTRUCTIONS });
+  const server = new Server({ name: MCP_NAME, version: "0.2.0" }, { capabilities: { tools: {} }, instructions: MCP_INSTRUCTIONS });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [{
       name: APPROVE_TOOL,

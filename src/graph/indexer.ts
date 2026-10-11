@@ -8,23 +8,20 @@ import { spawnSync } from "node:child_process";
 import { GraphStore } from "./store.js";
 import { SFC_EXT, componentName, splitSfc, templateCalleeNames } from "./sfc.js";
 import { Aliases, aliasCandidates } from "./aliases.js";
+import { EXTRA_EXT, ProjectIndex, extractLang, isExtraLang, type Binding, type Call, type ExtraLang, type Sym } from "./langs.js";
 
 const require = createRequire(import.meta.url);
 const WASM_DIR = path.dirname(require.resolve("tree-sitter-wasms/package.json")) + "/out";
 
-type Lang = "typescript" | "tsx" | "javascript" | "python";
+type Lang = "typescript" | "tsx" | "javascript" | "python" | ExtraLang;
 const EXT: Record<string, Lang> = {
   ".ts": "typescript", ".mts": "typescript", ".cts": "typescript",
   ".tsx": "tsx", ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
   ".py": "python",
+  ...EXTRA_EXT,
 };
 /** Tudo que o grafo indexa: código em EXT e os scripts de componentes (.svelte/.vue/.astro). Usado também nas instruções do MCP. */
 export const INDEXED_EXTENSIONS = [...Object.keys(EXT), ...SFC_EXT];
-
-interface Sym { id: string; name: string; kind: string; file: string; startLine: number; endLine: number }
-interface Call { callerId: string | null; callee: string; obj: string; file: string }
-/** [nome local, especificador do módulo, nome importado | "default" | "*"] */
-type Binding = [string, string, string];
 
 
 const parsers = new Map<Lang, Parser>();
@@ -174,6 +171,8 @@ function resolveImport(from: string, spec: string, known: Set<string>, aliases?:
 }
 
 const INDEXER_VERSION = "v4";
+const TYPE_KINDS = new Set(["class", "interface", "struct", "trait", "enum", "module", "type"]);
+const JS_LIKE_RE = /\.(m|c)?[jt]sx?$|\.py$|\.svelte$|\.vue$|\.astro$/;
 const SEP = "\t";
 
 export interface IndexOptions { full?: boolean; onProgress?: (m: string) => void }
@@ -187,8 +186,9 @@ interface StoredFile { hash: string; calls: string[]; imports: string[]; binding
 const EXT_GLOB = INDEXED_EXTENSIONS.map((e) => e.slice(1)).join(",");
 const EXT_RE = new RegExp(`\\.(${INDEXED_EXTENSIONS.map((e) => e.slice(1)).join("|")})$`);
 /** Pastas que nunca entram, mesmo que estejam no git. */
-const HARD_IGNORE = ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.git/**", "**/.brito/**", "**/__pycache__/**", "**/*.d.ts", "**/.venv/**"];
-const HARD_IGNORE_RE = /(^|\/)(node_modules|dist|build|\.git|\.brito|__pycache__|\.venv)(\/|$)|\.d\.ts$/;
+const HARD_IGNORE = ["**/node_modules/**", "**/dist/**", "**/build/**", "**/.git/**", "**/.brito/**", "**/__pycache__/**", "**/*.d.ts", "**/.venv/**",
+  "**/target/**", "**/vendor/**", "**/obj/**", "**/.gradle/**", "**/*.pb.go", "**/*.g.cs", "**/*.Designer.cs"];
+const HARD_IGNORE_RE = /(^|\/)(node_modules|dist|build|\.git|\.brito|__pycache__|\.venv|target|vendor|obj|\.gradle)(\/|$)|\.d\.ts$|\.pb\.go$|\.g\.cs$|\.Designer\.cs$/;
 
 /**
  * Arquivos que o git considera parte do projeto: rastreados + novos que não estão no .gitignore. Assim o grafo não
@@ -273,7 +273,7 @@ export async function indexProject(root: string, store: GraphStore, opts: IndexO
     const sfc = SFC_EXT.has(ext) ? splitSfc(src, ext) : null;
     const lang: Lang = sfc ? (sfc.tsx ? "tsx" : "typescript") : EXT[ext];
     const tree = (await getParser(lang)).parse(sfc ? sfc.script : src);
-    const info = extract(tree.rootNode, lang, rel);
+    const info = isExtraLang(lang) ? extractLang(tree.rootNode, lang, rel) : extract(tree.rootNode, lang, rel);
     tree.delete();
     if (sfc) {
       const name = componentName(rel);
@@ -294,15 +294,44 @@ export async function indexProject(root: string, store: GraphStore, opts: IndexO
 
   // 3. Recalcula arestas desejadas em memória (sem parsear) e aplica diff.
   const known = new Set(stored.keys());
+  const projectIndex = new ProjectIndex(root, known);
+  /** Arquivos que um import pode designar: vários em linguagens de pacote (Go, Java/Kotlin com wildcard), no máximo um em TS/Python. */
+  const resolveAll = (from: string, spec: string): string[] => {
+    const r = projectIndex.resolve(from, spec);
+    if (r) return r;
+    const one = resolveImport(from, spec, known, aliases);
+    return one ? [one] : [];
+  };
   const byName = new Map<string, { id: string; file: string; method: boolean }[]>();
   const symByFile = new Map<string, Map<string, string[]>>();
+  const shortByFile = new Map<string, Map<string, string[]>>();
+  const typesByName = new Map<string, { name: string; file: string }[]>();
   for (const r of await store.run("MATCH (s:Symbol) RETURN s.id AS id, s.name AS name, s.kind AS kind, s.file AS file")) {
     const short = String(r.name).split(".").pop()!;
     (byName.get(short) ?? byName.set(short, []).get(short)!).push({ id: r.id, file: r.file, method: r.kind === "method" });
     const m = symByFile.get(r.file) ?? symByFile.set(r.file, new Map()).get(r.file)!;
     (m.get(r.name) ?? m.set(r.name, []).get(r.name)!).push(r.id);
+    const sm = shortByFile.get(r.file) ?? shortByFile.set(r.file, new Map()).get(r.file)!;
+    (sm.get(short) ?? sm.set(short, []).get(short)!).push(r.id);
+    if (TYPE_KINDS.has(r.kind)) {
+      const key = String(r.name).toLowerCase();
+      (typesByName.get(key) ?? typesByName.set(key, []).get(key)!).push({ name: r.name, file: r.file });
+    }
   }
   const lookup = (file: string, name: string) => symByFile.get(file)?.get(name) ?? [];
+  /** Símbolo pelo nome curto, ignorando a classe (Strings.trim importado como `trim`). Só para linguagens que aninham métodos em tipos. */
+  const lookupShort = (file: string, name: string) => symByFile.has(file) ? shortByFile.get(file)?.get(name) ?? [] : [];
+  const jsLike = (file: string) => JS_LIKE_RE.test(file);
+  const clsOf = (callerName: string) => (callerName.includes(".") ? callerName.split(".")[0] : null);
+  /**
+   * `repo.load()` / `Repo.create()` / `_userService.find()`: casa o receptor com um tipo do projeto pelo nome (sem `_`/`m_`,
+   * sem diferenciar caixa) e procura o método nele. Só vale com poucos candidatos; é heurística, sem inferência de tipos.
+   */
+  const viaTypeName = (obj: string, callee: string): string[] => {
+    const cands = typesByName.get(obj.replace(/^(m?_+|m(?=[A-Z]))/, "").toLowerCase()) ?? [];
+    if (!cands.length || cands.length > 3) return [];
+    return cands.flatMap((c) => lookup(c.file, `${c.name}.${callee}`));
+  };
 
   const bindingsOf = new Map<string, Map<string, { spec: string; imported: string }>>();
   for (const [file, f] of stored) {
@@ -320,36 +349,44 @@ export async function indexProject(root: string, store: GraphStore, opts: IndexO
     return pool.length > 3 ? [] : pool.map((t) => t.id);
   };
 
-  /** Ordem: import explícito → this/self → mesmo arquivo → heurística por nome. */
+  /** Ordem: import explícito → this/self → mesmo arquivo → tipo pelo nome → heurística por nome. */
   const resolveCall = (file: string, callerId: string, callee: string, obj: string): string[] => {
     const binds = bindingsOf.get(file)!;
     const callerName = callerId.slice(callerId.indexOf("::") + 2, callerId.lastIndexOf(":"));
     if (!obj) {
       const b = binds.get(callee);
       if (b) {
-        const tf = resolveImport(file, b.spec, known, aliases);
-        if (!tf && !b.spec.startsWith(".")) return []; // pacote externo (não é relativo nem alias do projeto)
-        const ids = tf ? lookup(tf, b.imported === "default" ? callee : b.imported) : [];
+        const tfs = resolveAll(file, b.spec);
+        if (!tfs.length && !b.spec.startsWith(".")) return []; // pacote externo (não é relativo nem alias do projeto)
+        const want = b.imported === "default" ? callee : b.imported;
+        let ids = tfs.flatMap((tf) => lookup(tf, want));
+        if (!ids.length && !jsLike(file)) ids = tfs.flatMap((tf) => lookupShort(tf, want));
         return ids.length ? ids : heuristic(file, callee, false); // re-export/barrel: cai no fallback
       }
       const own = lookup(file, callee);
       return own.length ? own : heuristic(file, callee, false);
     }
+    if (obj === "@") { // chamada solta dentro de classe: método da própria classe, senão função/import, senão herdado (por nome)
+      const cls = clsOf(callerName);
+      const own = cls ? lookup(file, `${cls}.${callee}`) : [];
+      if (own.length) return own;
+      const free = resolveCall(file, callerId, callee, "");
+      return free.length ? free : heuristic(file, callee, true);
+    }
     if (obj === "this" || obj === "self") {
-      const cls = callerName.includes(".") ? callerName.split(".")[0] : null;
+      const cls = clsOf(callerName);
       const ids = cls ? lookup(file, `${cls}.${callee}`) : [];
       return ids.length ? ids : heuristic(file, callee, true);
     }
     const b = binds.get(obj);
     if (b) {
-      const tf = resolveImport(file, b.spec, known, aliases);
-      if (!tf && !b.spec.startsWith(".")) return []; // fs.readFileSync, z.string()…
-      if (tf) {
-        const ids = lookup(tf, callee).concat(lookup(tf, `${b.imported}.${callee}`));
-        if (ids.length) return ids;
-      }
+      const tfs = resolveAll(file, b.spec);
+      if (!tfs.length && !b.spec.startsWith(".")) return []; // fs.readFileSync, z.string()…
+      const ids = tfs.flatMap((tf) => lookup(tf, callee).concat(lookup(tf, `${b.imported}.${callee}`)));
+      if (ids.length) return ids;
     }
-    return heuristic(file, callee, true);
+    const typed = viaTypeName(obj, callee);
+    return typed.length ? typed : heuristic(file, callee, true);
   };
 
   const wantCalls = new Set<string>();
@@ -360,8 +397,7 @@ export async function indexProject(root: string, store: GraphStore, opts: IndexO
       for (const id of resolveCall(file, callerId, callee, obj ?? "")) if (id !== callerId) wantCalls.add(callerId + SEP + id);
     }
     for (const spec of f.imports) {
-      const target = resolveImport(file, spec, known, aliases);
-      if (target && target !== file) wantImports.add(file + SEP + target);
+      for (const target of resolveAll(file, spec)) if (target !== file) wantImports.add(file + SEP + target);
     }
   }
   const haveCalls = new Set((await store.run("MATCH (a:Symbol)-[:CALLS]->(b:Symbol) RETURN a.id AS a, b.id AS b")).map((r) => r.a + SEP + r.b));

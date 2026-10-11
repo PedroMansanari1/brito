@@ -1,6 +1,6 @@
 {
   "name": "brito",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Coding-agent CLI with a code knowledge graph, memory and reviewable skills / CLI de agente de código com grafo de conhecimento, memória e skills revisáveis",
   "type": "module",
   "bin": {

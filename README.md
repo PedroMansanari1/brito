@@ -25,7 +25,7 @@ Brito is a terminal agent for software development. Instead of grepping and read
 
 ```mermaid
 flowchart LR
-    code["Your project<br/>.ts · .js · .py · .svelte · .vue · .astro"] -->|"tree-sitter<br/>incremental"| cg[("Code graph<br/>symbols · calls · imports")]
+    code["Your project<br/>.ts · .js · .py · .java · .kt · .go · .rb · .php · .cs · .rs · .svelte · .vue · .astro"] -->|"tree-sitter<br/>incremental"| cg[("Code graph<br/>symbols · calls · imports")]
     cg <-->|"graph_search · graph_callers<br/>graph_impact · graph_context"| agent{{"Brito agent"}}
     mem[("Memory<br/>decisions · conventions")] <-->|"recall / remember"| agent
     agent -->|"after a complex task"| learn["Reflection"]
@@ -106,9 +106,10 @@ OK: 20 arquivos, 66 símbolos, 54 chamadas, 17 imports | +0 ~0 -0 =20 (28ms)
 
 ## What the graph indexes
 
-- **Languages:** TypeScript/JavaScript (`.ts .tsx .mts .cts .js .jsx .mjs .cjs`), Python (`.py`) and the `.svelte`, `.vue` and `.astro` components. In components Brito reads the script block(s) (and Astro's frontmatter) and records calls made from the template to functions the script declares or imports; each component becomes a `component` symbol.
-- **Scope:** inside a git repository, only what git considers part of the project (tracked + untracked-but-not-ignored), so anything in `.gitignore` stays out. Outside git, or with `BRITO_INDEX_IGNORED=1`, it indexes by glob (still skipping `node_modules`, `dist`, `build`, `.venv`, `.brito`).
+- **Languages:** TypeScript/JavaScript (`.ts .tsx .mts .cts .js .jsx .mjs .cjs`), Python (`.py`), backend languages — Java (`.java`), Kotlin (`.kt`), Go (`.go`), Ruby (`.rb`), PHP (`.php`), C# (`.cs`), Rust (`.rs`) — and the `.svelte`, `.vue` and `.astro` components. In components Brito reads the script block(s) (and Astro's frontmatter) and records calls made from the template to functions the script declares or imports; each component becomes a `component` symbol.
+- **Scope:** inside a git repository, only what git considers part of the project (tracked + untracked-but-not-ignored), so anything in `.gitignore` stays out. Outside git, or with `BRITO_INDEX_IGNORED=1`, it indexes by glob (still skipping `node_modules`, `dist`, `build`, `target`, `vendor`, `obj`, `.gradle`, `.venv`, `.brito`).
 - **Imports:** relative and aliased. Resolves `paths`/`baseUrl` from `tsconfig.json`/`jsconfig.json` (following relative `extends`, like `.svelte-kit/tsconfig.json`), `package.json` `imports` (`#internal/*`) and SvelteKit's `$lib`. Configuration applies per file (nearest config), so monorepos work; editing a tsconfig re-indexes the affected files.
+- **Backend languages:** the graph holds classes/interfaces/structs/traits/enums/modules, functions and methods (`Class.method`), calls and imports. Imports name a package, not a path, so Brito matches them against the end of your files' paths (`com.acme.Repo` ↔ `src/main/java/com/acme/Repo.java`; PHP PSR-4 namespaces; Rust `use crate::…`; Ruby `require`/`require_relative`; Go packages through the `go.mod` module path). External packages (`java.util`, `serde`, `github.com/gin-gonic/gin`) never match and create no edges. There is no type inference: a call like `userRepository.save()` is linked by matching the receiver name to a type in the project (`UserRepository`), `this`/`self`/receivers resolve to the enclosing class, and a bare call inside a class tries the class's own methods first.
 - **Not yet:** `extends` by package (`@tsconfig/node20`), sibling-workspace `exports`, and function references without a call in a template (`onclick={fn}`). Calls are resolved statically with name-based fallbacks, so dynamic dispatch and reflection are not captured.
 
 ## Databases and other sensitive resources
@@ -135,7 +136,7 @@ Project data lives in `.brito/` (graph, project skills, agents) and global data 
 
 ## Limitations
 
-- Early software (v0.1.0), one maintainer.
+- Early software (v0.2.0), one maintainer.
 - **The interface and the agent's default language are Brazilian Portuguese.** Translating them is a welcome contribution.
 - Skill learning is a heuristic: it proposes, you decide. Expect some proposals to be rejected.
 

@@ -25,7 +25,7 @@ O Brito é um agente de terminal para desenvolvimento de software. Em vez de dar
 
 ```mermaid
 flowchart LR
-    code["Seu projeto<br/>.ts · .js · .py · .svelte · .vue · .astro"] -->|"tree-sitter<br/>incremental"| cg[("Grafo de código<br/>símbolos · chamadas · imports")]
+    code["Seu projeto<br/>.ts · .js · .py · .java · .kt · .go · .rb · .php · .cs · .rs · .svelte · .vue · .astro"] -->|"tree-sitter<br/>incremental"| cg[("Grafo de código<br/>símbolos · chamadas · imports")]
     cg <-->|"graph_search · graph_callers<br/>graph_impact · graph_context"| agent{{"Agente Brito"}}
     mem[("Memória<br/>decisões · convenções")] <-->|"recall / remember"| agent
     agent -->|"após uma tarefa complexa"| learn["Reflexão"]
@@ -106,9 +106,10 @@ OK: 20 arquivos, 66 símbolos, 54 chamadas, 17 imports | +0 ~0 -0 =20 (28ms)
 
 ## O que o grafo indexa
 
-- **Linguagens:** TypeScript/JavaScript (`.ts .tsx .mts .cts .js .jsx .mjs .cjs`), Python (`.py`) e os componentes `.svelte`, `.vue` e `.astro`. Nos componentes o Brito lê o(s) bloco(s) de script (e o frontmatter do Astro) e registra as chamadas feitas no template a funções que o script declara ou importa; cada componente vira um símbolo `component`.
-- **Escopo:** em um repositório git, só o que o git considera parte do projeto (rastreados + novos não ignorados), então o que está no `.gitignore` não entra. Fora do git, ou com `BRITO_INDEX_IGNORED=1`, indexa por glob (ainda sem `node_modules`, `dist`, `build`, `.venv`, `.brito`).
+- **Linguagens:** TypeScript/JavaScript (`.ts .tsx .mts .cts .js .jsx .mjs .cjs`), Python (`.py`), linguagens de backend — Java (`.java`), Kotlin (`.kt`), Go (`.go`), Ruby (`.rb`), PHP (`.php`), C# (`.cs`), Rust (`.rs`) — e os componentes `.svelte`, `.vue` e `.astro`. Nos componentes o Brito lê o(s) bloco(s) de script (e o frontmatter do Astro) e registra as chamadas feitas no template a funções que o script declara ou importa; cada componente vira um símbolo `component`.
+- **Escopo:** em um repositório git, só o que o git considera parte do projeto (rastreados + novos não ignorados), então o que está no `.gitignore` não entra. Fora do git, ou com `BRITO_INDEX_IGNORED=1`, indexa por glob (ainda sem `node_modules`, `dist`, `build`, `target`, `vendor`, `obj`, `.gradle`, `.venv`, `.brito`).
 - **Imports:** relativos e por alias. Resolve `paths`/`baseUrl` do `tsconfig.json`/`jsconfig.json` (seguindo `extends` relativo, como o `.svelte-kit/tsconfig.json`), `imports` do `package.json` (`#interno/*`) e o `$lib` do SvelteKit. A configuração vale por arquivo (a mais próxima), então monorepos funcionam; editar um tsconfig reindexa os arquivos afetados.
+- **Linguagens de backend:** o grafo guarda classes/interfaces/structs/traits/enums/módulos, funções e métodos (`Classe.metodo`), chamadas e imports. Nelas o import nomeia um pacote, não um caminho; o Brito casa o especificador com o final do caminho dos seus arquivos (`com.acme.Repo` ↔ `src/main/java/com/acme/Repo.java`; namespaces PSR-4 do PHP; `use crate::…` do Rust; `require`/`require_relative` do Ruby; pacotes Go pelo módulo do `go.mod`). Pacote externo (`java.util`, `serde`, `github.com/gin-gonic/gin`) nunca casa e não gera aresta. Não há inferência de tipos: `userRepository.save()` é ligado casando o nome do receptor com um tipo do projeto (`UserRepository`), `this`/`self`/receiver resolvem para a classe que contém a chamada, e uma chamada solta dentro de classe tenta primeiro os métodos da própria classe.
 - **Ainda não:** `extends` por pacote (`@tsconfig/node20`), `exports` de workspaces vizinhos e referências de função sem chamada em um template (`onclick={fn}`). As chamadas são resolvidas estaticamente, com fallback por nome, então despacho dinâmico e reflexão não são capturados.
 
 ## Bancos de dados e outros recursos sensíveis
@@ -135,7 +136,7 @@ Os dados do projeto ficam em `.brito/` (grafo, skills do projeto, agentes) e os 
 
 ## Limitações
 
-- Software em fase inicial (v0.1.0), um mantenedor.
+- Software em fase inicial (v0.2.0), um mantenedor.
 - **A interface e o idioma padrão do agente são português do Brasil.** Traduzi-los é uma contribuição bem-vinda.
 - O aprendizado de skills é heurístico: ele propõe, você decide. Espere rejeitar algumas propostas.
 
