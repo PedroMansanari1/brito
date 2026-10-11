@@ -55,7 +55,10 @@ O lint **rejeita** segredos/tokens, caminhos absolutos do usuário, credenciais 
 Requer Node >= 20. Desenvolvido no macOS; no Linux deve funcionar, no Windows não foi testado.
 
 ```bash
-# uma linha
+# pelo npm (o comando é `brito`)
+npm i -g brito-cli
+
+# ou uma linha
 curl -fsSL https://raw.githubusercontent.com/wilsonbrito/brito/main/install.sh | bash
 
 # ou direto do GitHub

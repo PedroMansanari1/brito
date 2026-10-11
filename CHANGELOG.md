@@ -2,6 +2,9 @@
 
 ## 0.2.0 — 2026-10-11
 
+### Packaging
+- Published on npm as **`brito-cli`** (`npm i -g brito-cli`); the command is still `brito`. The unscoped name `brito` is blocked by npm's similar-name rule.
+
 ### Added
 - Code graph for backend languages: **Java** (`.java`), **Kotlin** (`.kt`), **Go** (`.go`), **Ruby** (`.rb`), **PHP** (`.php`), **C#** (`.cs`) and **Rust** (`.rs`), alongside TypeScript/JavaScript, Python and `.svelte/.vue/.astro`.
   - Symbols: classes, interfaces, structs, traits, enums, modules, functions and methods (`Class.method`).
