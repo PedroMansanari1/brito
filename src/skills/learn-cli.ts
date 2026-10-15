@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { claudeCommand } from "../util/platform.js";
 import os from "node:os";
 import type Anthropic from "@anthropic-ai/sdk";
 import type { Complete } from "./learn.js";
@@ -36,7 +37,8 @@ export const claudeCliComplete: Complete = ({ model, system, user }) =>
     const args = ["-p", "--system-prompt", system + NOTE, "--tools", "", "--output-format", "json", "--no-session-persistence",
       "--disable-slash-commands", "--setting-sources", "", "--json-schema", JSON.stringify(SCHEMA)];
     if (model) args.push("--model", model);
-    const child = spawn("claude", args, { cwd: os.tmpdir(), stdio: ["pipe", "pipe", "pipe"] });
+    const cmd = claudeCommand(args);
+    const child = spawn(cmd.command, cmd.args, { cwd: os.tmpdir(), stdio: ["pipe", "pipe", "pipe"] });
     let out = "", err = "";
     child.stdout.on("data", (d) => (out += d));
     child.stderr.on("data", (d) => (err += d));

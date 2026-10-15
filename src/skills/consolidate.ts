@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { z } from "zod";
 import { toApiTools } from "../tools/registry.js";
 import type { Complete } from "./learn.js";
@@ -70,10 +72,33 @@ export function describeProposal(root: string, p: Proposal, now = Date.now()): s
 }
 
 /** Aplica direto no store (o usuário já aprovou; não passa pelo atalho de aprovação do modo bypass). */
-export function applyProposal(root: string, p: Proposal): string {
+export function applyProposal(root: string, p: Proposal, auto = false): string {
   if (p.kind === "save") {
-    const r = saveSkill(root, p.input, p.scope);
+    const r = saveSkill(root, p.input, p.scope, { auto });
     return r.created ? `skill ${p.input.name} criada (${r.scope}, v1)` : `skill ${p.input.name} atualizada (${r.scope}, v${r.version})`;
   }
   return deleteSkill(root, p.name) ? `skill ${p.name} removida` : `skill ${p.name} não encontrada`;
+}
+
+/** Só propostas que tocam skills criadas sozinhas podem ser aplicadas sem o usuário; as demais ficam para `/skills consolidate`. */
+export function autoApplicable(root: string, proposals: Proposal[]): Proposal[] {
+  return proposals.filter((p) => {
+    const s = getSkill(root, p.kind === "save" ? p.input.name : p.name);
+    return p.kind === "save" ? (!s || s.origin === "auto") : s?.origin === "auto";
+  });
+}
+
+const STAMP = ".last-consolidate";
+const CONSOLIDATE_EVERY_DAYS = 7;
+const CONSOLIDATE_MIN_SKILLS = 6;
+
+/** Consolidação periódica sem o usuário: no máximo 1x por semana, com ≥6 skills, só sobre skills automáticas. Devolve avisos. */
+export async function autoConsolidate(root: string, model: string, complete: Complete, now = Date.now()): Promise<string[]> {
+  if (listSkills(root, now).length < CONSOLIDATE_MIN_SKILLS) return [];
+  const stamp = path.join(root, ".brito", "skills", STAMP);
+  try { if (now - fs.statSync(stamp).mtimeMs < CONSOLIDATE_EVERY_DAYS * 86_400_000) return []; } catch { /* nunca rodou */ }
+  fs.mkdirSync(path.dirname(stamp), { recursive: true });
+  fs.writeFileSync(stamp, new Date(now).toISOString());
+  const proposals = autoApplicable(root, await proposeConsolidation(root, model, complete, now));
+  return proposals.map((p) => applyProposal(root, p, true));
 }

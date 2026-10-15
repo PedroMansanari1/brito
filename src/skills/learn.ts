@@ -4,6 +4,7 @@ import { execTool, toApiTools, type ToolContext } from "../tools/registry.js";
 import type { TurnRecord } from "../agent/loop.js";
 import { perms } from "../permissions.js";
 import { getSkill, listPending, listSkills, savePending, staleRefs } from "./store.js";
+import { saveAuto, skillsMode, recordOutcome } from "./trial.js";
 import { appendJournal, describeEntry, entryFromTurn, similarEntries } from "./journal.js";
 
 /** Turno longo sem nenhum outro sinal só vale reflexão a partir deste tamanho. */
@@ -82,9 +83,23 @@ export function extractSignals(turn: TurnRecord): Signal[] {
  * `BRITO_LEARN_V2=0` volta ao gatilho antigo (≥6 tools ou skill usada).
  */
 export function shouldReflect(turn: TurnRecord | null, ctx: ToolContext): boolean {
-  if (!turn || !turn.finished) return false;
+  if (!turn || !turn.finished || skillsMode() === "off") return false;
   if (process.env.BRITO_LEARN_V2 === "0") return turn.toolCalls >= 6 || (ctx.loadedSkills?.size ?? 0) > 0;
   return extractSignals(turn).length > 0 || turn.toolCalls >= MIN_TOOLS;
+}
+
+/** Resultado do turno para as skills carregadas nele: tropeço (erro→conserto ou correção do usuário) é falha. Abortado = neutro. */
+export function judgeTurn(turn: TurnRecord): "win" | "loss" | null {
+  if (!turn.finished) return null;
+  return extractSignals(turn).length ? "loss" : "win";
+}
+
+/** Credita o turno às skills carregadas nele; pode promover ou arquivar skills em teste. Devolve avisos. */
+export function recordOutcomes(turn: TurnRecord | null, ctx: ToolContext): string[] {
+  if (!turn || skillsMode() === "off") return [];
+  const verdict = judgeTurn(turn);
+  if (!verdict) return [];
+  return [...(ctx.loadedSkills ?? [])].flatMap((n) => recordOutcome(ctx.root, n, verdict === "win") ?? []);
 }
 
 /** Chamada ao modelo isolada para poder ser trocada por um fake nos testes e no eval. */
@@ -172,8 +187,17 @@ export function buildReflectInput(turn: TurnRecord, ctx: ToolContext, previous?:
   );
 }
 
+const SaveArgs = z.object({ name: z.string(), description: z.string(), body: z.string(), refs: z.array(z.string()).default([]), reason: z.string().default(""), scope: z.enum(["project", "global"]).optional() });
+
+/** Modo autônomo: grava em teste (ou na fila de revisão, se for arriscado) sem perguntar ao usuário. */
+function stageAuto(input: unknown, ctx: ToolContext): { saved: boolean; msg: string } {
+  const parsed = SaveArgs.safeParse(input);
+  if (!parsed.success) return { saved: false, msg: "skill não salva: input inválido" };
+  try { return saveAuto(ctx.root, parsed.data); } catch (e: any) { return { saved: false, msg: `skill não salva: ${e?.message ?? e}` }; }
+}
+
 function stage(input: unknown, ctx: ToolContext): string {
-  const parsed = z.object({ name: z.string(), description: z.string(), body: z.string(), refs: z.array(z.string()).default([]), reason: z.string().default(""), scope: z.enum(["project", "global"]).optional() }).safeParse(input);
+  const parsed = SaveArgs.safeParse(input);
   if (!parsed.success) return `skill não salva: input inválido`;
   try {
     const scope = savePending(ctx.root, parsed.data, parsed.data.scope);
@@ -192,6 +216,12 @@ export async function reflect(turn: TurnRecord, ctx: ToolContext, model: string,
     if (b.type !== "tool_use" || b.name !== "skill_save" || saves >= MAX_SAVES) continue;
     saves++;
     const name = String((b.input as { name?: unknown })?.name ?? "");
+    if (skillsMode() === "auto") {
+      const r = stageAuto(b.input, ctx);
+      out.push(r.msg);
+      if (r.saved) saved.push(name);
+      continue;
+    }
     // Em bypass nada pede aprovação: a proposta vai para a fila de revisão em vez de virar instrução ativa.
     if (perms.mode === "bypass") {
       const msg = stage(b.input, ctx);

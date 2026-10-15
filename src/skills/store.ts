@@ -5,6 +5,10 @@ import { parseFrontmatter, stringifyFrontmatter } from "../util/frontmatter.js";
 
 export type Scope = "project" | "global";
 
+/** `trial` = hipótese criada sozinha, ainda sem evidência; `active` = confiável (aprovada por humano ou promovida pelos resultados). */
+export type SkillStatus = "trial" | "active";
+export type SkillOrigin = "manual" | "auto";
+
 export interface Skill {
   name: string;
   description: string;
@@ -16,6 +20,13 @@ export interface Skill {
   lastUsed: string;
   /** arquivos/símbolos a que a skill se aplica (liga skill ↔ grafo) */
   refs: string[];
+  status: SkillStatus;
+  /** `auto` = criada pela reflexão sem revisão humana; só estas sofrem promoção/arquivamento automáticos */
+  origin: SkillOrigin;
+  /** turnos que usaram a skill e terminaram sem erro→conserto nem correção do usuário */
+  wins: number;
+  /** turnos que usaram a skill e tiveram erro→conserto ou correção do usuário */
+  losses: number;
   body: string;
   /** derivado do diretório onde o arquivo está */
   scope: Scope;
@@ -44,17 +55,21 @@ function parse(text: string, scope: Scope): Skill | null {
     updated: meta.updated ?? today(),
     lastUsed: meta.lastUsed ?? meta.updated ?? today(),
     refs: (meta.refs ?? "").split(",").map((r) => r.trim()).filter(Boolean),
+    status: meta.status === "trial" ? "trial" : "active",
+    origin: meta.origin === "auto" ? "auto" : "manual",
+    wins: Number(meta.wins) || 0,
+    losses: Number(meta.losses) || 0,
     body: body.trim(),
     scope,
   };
 }
 
-function write(root: string, s: Skill) {
+export function writeSkill(root: string, s: Skill) {
   const file = fileOf(root, s.scope, s.name);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(
     file,
-    stringifyFrontmatter({ name: s.name, description: s.description, version: s.version, uses: s.uses, created: s.created, updated: s.updated, lastUsed: s.lastUsed, refs: s.refs.join(", ") }, s.body),
+    stringifyFrontmatter({ name: s.name, description: s.description, version: s.version, uses: s.uses, created: s.created, updated: s.updated, lastUsed: s.lastUsed, refs: s.refs.join(", "), status: s.status, origin: s.origin, wins: s.wins, losses: s.losses }, s.body),
   );
 }
 
@@ -159,8 +174,12 @@ export function targetScope(root: string, name: string, scope?: Scope): Scope {
   return scope ?? getSkill(root, name)?.scope ?? "project";
 }
 
-/** Cria ou atualiza. A versão anterior vai para `history/vN.md`. */
-export function saveSkill(root: string, input: SkillInput, scope?: Scope): { created: boolean; version: number; scope: Scope } {
+/**
+ * Cria ou atualiza. A versão anterior vai para `history/vN.md`.
+ * `opts.auto` = gravação sem revisão humana (reflexão autônoma): skill nova nasce em teste; atualizar mantém a origem, e
+ * uma skill em teste zera o placar (conteúdo novo = hipótese nova). Sem `auto`, um humano aprovou: vira ativa e manual.
+ */
+export function saveSkill(root: string, input: SkillInput, scope?: Scope, opts: { auto?: boolean } = {}): { created: boolean; version: number; scope: Scope } {
   validate(input);
   const target = targetScope(root, input.name, scope);
   const prev = getSkillIn(root, input.name, target);
@@ -178,10 +197,14 @@ export function saveSkill(root: string, input: SkillInput, scope?: Scope): { cre
     updated: today(),
     lastUsed: prev?.lastUsed ?? today(),
     refs: input.refs ?? prev?.refs ?? [],
+    status: opts.auto ? (prev?.status ?? "trial") : "active",
+    origin: opts.auto ? (prev?.origin ?? "auto") : "manual",
+    wins: opts.auto && prev?.status === "trial" ? 0 : prev?.wins ?? 0,
+    losses: opts.auto && prev?.status === "trial" ? 0 : prev?.losses ?? 0,
     body: input.body.trim(),
     scope: target,
   };
-  write(root, skill);
+  writeSkill(root, skill);
   return { created: !prev, version: skill.version, scope: target };
 }
 
@@ -233,7 +256,7 @@ export function rejectPending(root: string, name: string): boolean {
 
 export function bumpUses(root: string, name: string) {
   const s = getSkill(root, name);
-  if (s) write(root, { ...s, uses: s.uses + 1, lastUsed: today() });
+  if (s) writeSkill(root, { ...s, uses: s.uses + 1, lastUsed: today() });
 }
 
 /** Move para `.trash` do próprio escopo em vez de apagar. */
@@ -259,5 +282,5 @@ export function promoteSkill(root: string, name: string): void {
 /** Índice compacto para o system prompt (divulgação progressiva: o corpo só entra via skill_load). */
 export function skillsIndex(root: string, max = 40, now = Date.now()): string {
   const all = listSkills(root, now).slice(0, max);
-  return all.length ? all.map((s) => `- ${s.name}${s.scope === "global" ? " (global)" : ""}${staleRefs(root, s).length ? " [refs obsoletas]" : ""}: ${s.description}`).join("\n") : "";
+  return all.length ? all.map((s) => `- ${s.name}${s.scope === "global" ? " (global)" : ""}${s.status === "trial" ? " (em teste)" : ""}${staleRefs(root, s).length ? " [refs obsoletas]" : ""}: ${s.description}`).join("\n") : "";
 }

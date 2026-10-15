@@ -1,0 +1,93 @@
+name: desktop
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, kind: macos }          # Apple Silicon
+          - { os: macos-15-intel, kind: macos }    # Intel
+          - { os: ubuntu-latest, kind: linux }
+          - { os: windows-latest, kind: windows }
+    runs-on: ${{ matrix.os }}
+    env:
+      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+      WIN_CERT_PFX: ${{ secrets.WIN_CERT_PFX }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm ci
+      - run: npm test
+      - run: npm run bundle
+      - run: npm --prefix desktop ci
+
+      # Assinatura opcional: sem os segredos o app sai só com assinatura ad-hoc (o macOS avisa "desenvolvedor não identificado").
+      - name: Importar certificado Apple
+        if: matrix.kind == 'macos' && env.APPLE_CERT_P12 != ''
+        env:
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          KC="$RUNNER_TEMP/build.keychain-db"; KP="$(uuidgen)"
+          echo "$APPLE_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KP" "$KC"
+          security set-keychain-settings -lut 3600 "$KC"
+          security unlock-keychain -p "$KP" "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -P "$APPLE_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KC"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KP" "$KC"
+          security list-keychains -d user -s "$KC" login.keychain
+
+      - name: Pacote macOS (.dmg)
+        if: matrix.kind == 'macos'
+        run: node desktop/package.mjs --dmg
+        env:
+          APPLE_SIGN_IDENTITY: ${{ secrets.APPLE_SIGN_IDENTITY }}
+
+      - name: Pacote Linux (.tar.gz)
+        if: matrix.kind == 'linux'
+        run: node desktop/package.mjs
+
+      - name: Instalador Windows (.exe)
+        if: matrix.kind == 'windows'
+        shell: pwsh
+        run: |
+          node desktop/package.mjs
+          choco install innosetup -y --no-progress
+          $v = (Get-Content package.json | ConvertFrom-Json).version
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$v" desktop\windows\brito.iss
+
+      # Assinatura opcional do instalador do Windows (certificado .pfx em base64 nos segredos).
+      - name: Assinar instalador Windows
+        if: matrix.kind == 'windows' && env.WIN_CERT_PFX != ''
+        shell: pwsh
+        env:
+          WIN_CERT_PASSWORD: ${{ secrets.WIN_CERT_PASSWORD }}
+        run: |
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx", [Convert]::FromBase64String($env:WIN_CERT_PFX))
+          $st = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1).FullName
+          Get-ChildItem desktop\dist-app\*.exe | ForEach-Object { & $st sign /f "$env:RUNNER_TEMP\cert.pfx" /p $env:WIN_CERT_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $_.FullName }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: brito-desktop-${{ matrix.os }}
+          path: |
+            desktop/dist-app/*.dmg
+            desktop/dist-app/*.tar.gz
+            desktop/dist-app/*.exe
+
+      - name: Publicar na Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            desktop/dist-app/*.dmg
+            desktop/dist-app/*.tar.gz
+            desktop/dist-app/*.exe

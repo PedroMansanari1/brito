@@ -1,8 +1,10 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { toApiTools, execTool, isConcurrent, type ToolContext } from "../tools/registry.js";
 import { estimateTokens, summarizeMiddle, trimOldToolResults } from "./context.js";
-import { ui } from "../ui/ui.js";
+import { ui as terminalUi } from "../ui/ui.js";
+import type { TurnSink } from "./sink.js";
 import { initialModel } from "../model.js";
+import { fmtBytes, findImages, imageBlock, splitOversize } from "../util/images.js";
 
 export const MODEL = initialModel();
 const COMPACT_AT = Number(process.env.BRITO_COMPACT_TOKENS ?? 120_000);
@@ -15,6 +17,8 @@ export interface AgentOptions {
   /** não imprime o texto em streaming (subagentes) */
   quiet?: boolean;
   log?: (s: string) => void;
+  /** destino do texto e das ferramentas do turno; padrão = terminal */
+  sink?: TurnSink;
 }
 
 /** Registro do último turno, usado pela reflexão que cria/melhora skills. */
@@ -38,11 +42,13 @@ export class Agent {
   recentTurns: TurnRecord[] = [];
   private maxSteps: number;
   private log: (s: string) => void;
+  private ui: TurnSink;
 
   constructor(private system: string | (() => string), private ctx: ToolContext, private opts: AgentOptions = {}) {
     this.model = opts.model ?? MODEL;
     this.maxSteps = opts.maxSteps ?? 40;
-    this.log = opts.log ?? ((s) => ui.info(s));
+    this.ui = opts.sink ?? terminalUi;
+    this.log = opts.log ?? ((s) => this.ui.info(s));
   }
 
   /** Roda um turno completo (até não haver mais tool_use) e devolve o texto final. */
@@ -68,7 +74,15 @@ export class Agent {
     this.lastTurn = turn;
     this.recentTurns = [...this.recentTurns, turn].slice(-3);
     const push = (m: Anthropic.MessageParam) => { this.messages.push(m); turn.messages.push(m); };
-    push({ role: "user", content: userText });
+    // Imagens arrastadas para o terminal chegam como caminhos no texto: anexa como blocos `image`. O registro do turno
+    // (usado na reflexão) guarda só o texto, para não carregar base64.
+    const { ok, tooBig } = splitOversize(findImages(userText, this.ctx.root));
+    for (const i of tooBig) this.log(`⚠ ${i.name} passa de 5 MB e não foi anexada`);
+    if (ok.length) {
+      this.log(`🖼 ${ok.map((i) => `${i.name} (${fmtBytes(i.bytes)})`).join(", ")} anexada${ok.length > 1 ? "s" : ""}`);
+      this.messages.push({ role: "user", content: [...ok.map(imageBlock), { type: "text", text: userText }] });
+      turn.messages.push({ role: "user", content: userText });
+    } else push({ role: "user", content: userText });
     await this.compactIfNeeded();
     let finalText = "";
 
@@ -84,7 +98,7 @@ export class Agent {
         },
         { signal },
       );
-      if (!this.opts.quiet) stream.on("text", (t) => ui.text(t));
+      if (!this.opts.quiet) stream.on("text", (t) => this.ui.text(t));
       const msg = await stream.finalMessage();
       this.contextTokens = msg.usage.input_tokens + (msg.usage.cache_read_input_tokens ?? 0) + (msg.usage.cache_creation_input_tokens ?? 0);
       this.usage.input += msg.usage.input_tokens + (msg.usage.cache_read_input_tokens ?? 0) + (msg.usage.cache_creation_input_tokens ?? 0);
@@ -95,18 +109,18 @@ export class Agent {
 
       const text = msg.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
       if (text) finalText = text;
-      if (!this.opts.quiet) ui.textEnd();
+      if (!this.opts.quiet) this.ui.textEnd();
 
       const uses = msg.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
       if (msg.stop_reason !== "tool_use" || uses.length === 0) { turn.finished = true; return finalText; }
 
       const runOne = async (u: Anthropic.ToolUseBlock): Promise<Anthropic.ToolResultBlockParam> => {
         const t0 = Date.now();
-        if (!this.opts.quiet) ui.toolStart(u.id, u.name, u.input);
+        if (!this.opts.quiet) this.ui.toolStart(u.id, u.name, u.input);
         const denied = this.opts.tools && !this.opts.tools.has(u.name);
         const r = denied ? { text: `Tool não permitida para este agente: ${u.name}`, isError: true } : await execTool(u.name, u.input, this.ctx);
-        if (this.opts.quiet) this.log(ui.toolLine(u.name, u.input, Date.now() - t0, r.isError));
-        else ui.toolEnd(u.id, r.isError);
+        if (this.opts.quiet) this.log(terminalUi.toolLine(u.name, u.input, Date.now() - t0, r.isError));
+        else this.ui.toolEnd(u.id, r.isError, r.text);
         return { type: "tool_result", tool_use_id: u.id, content: r.text.slice(0, 40_000), is_error: r.isError };
       };
 
@@ -119,7 +133,7 @@ export class Agent {
       push({ role: "user", content: results });
       await this.compactIfNeeded();
     }
-    ui.warn("Limite de passos atingido.");
+    this.ui.warn("Limite de passos atingido.");
     return finalText || "(limite de passos atingido sem resposta final)";
   }
 

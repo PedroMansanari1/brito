@@ -1,3 +1,4 @@
+import { shellFor } from "./util/platform.js";
 import readline from "node:readline";
 import path from "node:path";
 import { exec } from "node:child_process";
@@ -106,7 +107,7 @@ export async function runRepl(b: ReplBackend, o: ReplOpts) {
 
   // ---------------------------------------------------------------- comandos
   const shell = (cmd: string) => new Promise<void>((done) =>
-    exec(cmd, { cwd: o.root, maxBuffer: 10 * 1024 * 1024 }, (err, out, errOut) => {
+    exec(cmd, { cwd: o.root, shell: shellFor(), maxBuffer: 10 * 1024 * 1024 }, (err, out, errOut) => {
       ui.print((out + (errOut ? c.err(errOut) : "") + (err && !out && !errOut ? c.err(String(err.message)) : "")).replace(/\n$/, ""));
       done();
     }));

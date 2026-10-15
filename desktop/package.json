@@ -1,0 +1,14 @@
+{
+  "name": "brito-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Janela do Brito (Electron). O agente roda em `brito gui-serve`, um processo Node à parte.",
+  "main": "main.mjs",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "png-to-ico": "^3.0.1"
+  }
+}

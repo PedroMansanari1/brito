@@ -1,20 +1,28 @@
+import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { listAgents, type AgentDef } from "./agents.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { skillsIndex } from "../skills/store.js";
 import { MCP_NAME, MCP_PREFIX, APPROVE_TOOL } from "../mcp/server.js";
-import { ui } from "../ui/ui.js";
+import { ui as terminalUi } from "../ui/ui.js";
+import type { TurnSink } from "./sink.js";
 import { MODE_ENV, perms, type PermMode } from "../permissions.js";
 import { wireEffort } from "../model.js";
 import type { TurnRecord } from "./loop.js";
+import { claudeCommand } from "../util/platform.js";
+import { fmtBytes, findImages, splitOversize } from "../util/images.js";
 
 // Backend alternativo: delega ao `claude` oficial, que autentica com o /login do usuário.
 // O brito nunca lê nem envia o token da assinatura. Grafo, memória e skills chegam ao claude via MCP.
 
 export function hasClaudeCli(): boolean {
-  return spawnSync("claude", ["--version"], { stdio: "ignore" }).status === 0;
+  const c = claudeCommand(["--version"]);
+  return spawnSync(c.command, c.args, { stdio: "ignore" }).status === 0;
 }
+
+/** Texto de um tool_result (string ou lista de blocos). */
+const resultText = (c: unknown): string => (typeof c === "string" ? c : Array.isArray(c) ? c.map((b: any) => (typeof b?.text === "string" ? b.text : "")).join("") : "");
 
 /** Nome das tools do Brito → nome que o claude enxerga. */
 const CLAUDE_TOOL: Record<string, string> = { read_file: "Read", glob: "Glob", grep: "Grep", write_file: "Write", edit_file: "Edit", bash: "Bash" };
@@ -65,9 +73,9 @@ export function recordStreamEvent(turn: TurnRecord, ev: any, loadedSkills: Set<s
  * Config do servidor MCP entregue ao claude. O servidor roda em outro processo: o env leva o socket de aprovação
  * e o modo de permissão do REPL (vale por turno, pois cada turno sobe um claude novo com esta config).
  */
-export function mcpConfig(cmd: { command: string; args: string[] }, approvalSock: string, mode: PermMode) {
+export function mcpConfig(cmd: { command: string; args: string[] }, approvalSock: string, mode: PermMode, extraEnv: Record<string, string> = {}) {
   // alwaysLoad: sem isso o claude adia as tools do Brito atrás do ToolSearch e o modelo raramente chega ao grafo.
-  return { mcpServers: { [MCP_NAME]: { type: "stdio", command: cmd.command, args: cmd.args, alwaysLoad: true, env: { BRITO_APPROVE_SOCK: approvalSock, [MODE_ENV]: mode } } } };
+  return { mcpServers: { [MCP_NAME]: { type: "stdio", command: cmd.command, args: cmd.args, alwaysLoad: true, env: { ...extraEnv, BRITO_APPROVE_SOCK: approvalSock, [MODE_ENV]: mode } } } };
 }
 
 export interface ClaudeBackendOpts {
@@ -77,10 +85,14 @@ export interface ClaudeBackendOpts {
   stats: string;
   /** como o claude deve subir o servidor MCP (este mesmo binário, subcomando mcp-serve) */
   mcpCommand: { command: string; args: string[] };
+  /** destino dos eventos do turno; padrão = terminal */
+  sink?: TurnSink;
+  /** variáveis extras para o claude (ex.: ELECTRON_RUN_AS_NODE no app desktop) */
+  env?: Record<string, string>;
 }
 
 export class ClaudeSession {
-  private id = randomUUID();
+  private id: string = randomUUID();
   private started = false;
   usage = { input: 0, output: 0, cacheRead: 0 };
   model = "claude (assinatura)";
@@ -103,12 +115,17 @@ export class ClaudeSession {
 
   constructor(private o: ClaudeBackendOpts) {}
 
+  get sessionId() { return this.id; }
+  /** Retoma uma conversa do claude (--resume) em vez de começar outra. */
+  resume(id: string) { this.id = id; this.started = true; }
   reset() { this.id = randomUUID(); this.started = false; this.contextTokens = 0; this.recentTurns = []; }
-  abort() { this.child?.kill("SIGINT"); }
+  abort() { if (!this.child) return; this.aborted = true; this.child.kill("SIGINT"); }
+  /** No Windows `kill("SIGINT")` termina o processo sem sinal nem código 130: lembramos que fomos nós que interrompemos. */
+  private aborted = false;
 
-  private args(text: string): string[] {
+  private args(text: string, imageDirs: string[] = []): string[] {
     const { root, approvalSock, stats, mcpCommand } = this.o;
-    const mcp = mcpConfig(mcpCommand, approvalSock, perms.mode);
+    const mcp = mcpConfig(mcpCommand, approvalSock, perms.mode, this.o.env);
     const readOnlyMcp = ["graph_search", "graph_callers", "graph_callees", "graph_impact", "graph_context", "graph_query", "graph_index", "remember", "recall", "skill_load"];
     const system = buildSystemPrompt(root, stats, skillsIndex(root)) +
       `\n\n# Nesta sessão\nAs tools do Brito chegam com o prefixo \`${MCP_PREFIX}\` (ex.: ${MCP_PREFIX}graph_context). Use-as como descrito acima. ` +
@@ -117,6 +134,8 @@ export class ClaudeSession {
       "-p", text,
       this.started ? "--resume" : "--session-id", this.id,
       "--output-format", "stream-json", "--verbose",
+      // Pastas das imagens anexadas: o Read do claude as lê sem pedir permissão (cada --add-dir é uma pasta).
+      ...imageDirs.flatMap((d) => ["--add-dir", d]),
       "--append-system-prompt", system,
       "--mcp-config", JSON.stringify(mcp),
       "--agents", JSON.stringify(claudeAgents()),
@@ -135,12 +154,19 @@ export class ClaudeSession {
 
   /** Roda um turno renderizando o stream-json com a UI do Brito. */
   send(text: string): Promise<boolean> {
+    const ui: TurnSink = this.o.sink ?? terminalUi;
     return new Promise((resolve) => {
       ui.turnStart();
-      const child = (this.child = spawn("claude", this.args(text), {
+      const { ok: imgs, tooBig } = splitOversize(findImages(text, this.o.root));
+      for (const i of tooBig) ui.warn(`${i.name} passa de 5 MB e não foi anexada`);
+      if (imgs.length) ui.info(`🖼 ${imgs.map((i) => `${i.name} (${fmtBytes(i.bytes)})`).join(", ")} anexada${imgs.length > 1 ? "s" : ""}`);
+      // O claude vê a imagem pela tool Read: o prompt diz quais arquivos são imagens anexadas pelo usuário.
+      const prompt = imgs.length ? `${text}\n\n[O usuário anexou ${imgs.length > 1 ? "estas imagens" : "esta imagem"}; abra com a tool Read para vê-${imgs.length > 1 ? "las" : "la"}:\n${imgs.map((i) => `- ${i.path}`).join("\n")}]` : text;
+      const cmd = claudeCommand(this.args(prompt, [...new Set(imgs.map((i) => path.dirname(i.path)))]));
+      const child = (this.child = spawn(cmd.command, cmd.args, {
         cwd: this.o.root, stdio: ["ignore", "pipe", "pipe"],
         // `/reasoning none`: o claude desliga o raciocínio com MAX_THINKING_TOKENS=0 (não há `--effort none`)
-        env: wireEffort(this.effort).thinking ? process.env : { ...process.env, MAX_THINKING_TOKENS: "0" },
+        env: { ...process.env, ...this.o.env, BRITO_DEPTH: String(Number(process.env.BRITO_DEPTH ?? 0) + 1), ...(wireEffort(this.effort).thinking ? {} : { MAX_THINKING_TOKENS: "0" }) },
       }));
       let buf = "", stderr = "", ok = true, interrupted = false;
       const names = new Map<string, { name: string; input: unknown }>();
@@ -165,7 +191,7 @@ export class ClaudeSession {
           // Mensagens de subagentes (sidechain) têm contexto próprio: não contam para a barra.
           if (u && !ev.parent_tool_use_id) this.contextTokens = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
         } else if (ev.type === "user") {
-          for (const b of ev.message?.content ?? []) if (b.type === "tool_result") ui.toolEnd(b.tool_use_id, !!b.is_error);
+          for (const b of ev.message?.content ?? []) if (b.type === "tool_result") ui.toolEnd(b.tool_use_id, !!b.is_error, resultText(b.content));
         } else if (ev.type === "result") {
           this.usage.input += (ev.usage?.input_tokens ?? 0) + (ev.usage?.cache_read_input_tokens ?? 0) + (ev.usage?.cache_creation_input_tokens ?? 0);
           this.usage.output += ev.usage?.output_tokens ?? 0;
@@ -191,7 +217,8 @@ export class ClaudeSession {
       child.on("error", (e) => { ok = false; ui.error(`não consegui executar o claude: ${e.message}`); });
       child.on("close", (code, signal) => {
         this.child = null;
-        interrupted = signal === "SIGINT" || code === 130;
+        interrupted = signal === "SIGINT" || code === 130 || this.aborted;
+        this.aborted = false;
         if (code !== 0 && !interrupted) { ok = false; if (stderr.trim()) ui.error(stderr.trim().slice(0, 600)); }
         else if (code === 0) this.started = true;
         turn.finished = ok && !interrupted && code === 0;

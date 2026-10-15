@@ -14,10 +14,11 @@ O Brito é um agente de terminal para desenvolvimento de software. Em vez de dar
 
 - **Exploração guiada pelo grafo.** `graph_search`, `graph_context`, `graph_callers`, `graph_callees` e `graph_impact` respondem "onde está, quem usa, o que quebra" sem ler arquivos inteiros. O grafo é embutido ([Kùzu](https://kuzudb.com)), local e incremental.
 - **Cobertura ampla.** TypeScript/JavaScript, Python e os blocos de script de componentes `.svelte`, `.vue` e `.astro`. Aliases de import (`paths` do tsconfig, `imports` do package.json, `$lib` do SvelteKit) viram arestas de verdade. O que o `.gitignore` ignora fica de fora.
-- **Skills que aprendem, com um humano no circuito.** Depois de uma tarefa complexa o Brito reflete sobre o que aconteceu e *propõe* skills. Nada fica ativo até você rodar `/skills approve`.
+- **Skills que aprendem sozinhas, em período de teste.** Depois de uma tarefa em que algo tropeçou ou foi corrigido, o Brito reflete e cria uma skill *em teste* sem te interromper. A skill se prova pelo uso: 3 usos limpos a promovem, 2 tropeços a arquivam (recuperável). O que é arriscado, ou qualquer mudança numa skill que você aprovou, continua esperando o seu `/skills approve`. `BRITO_SKILLS=ask` volta a pedir aprovação para tudo; `off` desliga o aprendizado.
 - **Proteções sobre o que é aprendido.** Um lint rejeita segredos, credenciais embutidas em URL, `curl | sh` e frases de injeção de prompt, e **avisa sobre comandos destrutivos** (veja abaixo).
-- **Modos de permissão.** manual, auto-edições, plano e "tudo liberado" (`Shift+Tab` alterna). Mesmo no último, as skills vão para a fila de revisão em vez de ficarem ativas.
+- **Modos de permissão.** manual, auto-edições, plano e "tudo liberado" (`Shift+Tab` alterna). As skills autônomas não dependem do modo: nascem em teste e são julgadas pelo resultado.
 - **Dois backends, uma interface.** Use uma chave da API da Anthropic ou a sua assinatura do Claude Code pela CLI `claude`. O Brito nunca lê nem envia o token da sua assinatura.
+- **Imagens.** Arraste um arquivo de imagem para o prompt (ou cole o caminho) e ele é anexado ao turno: PNG, JPEG, GIF ou WebP, até 5 MB.
 - **Subagentes.** `explore`, `plan` e `general` rodam em contextos isolados (os somente-leitura, em paralelo); crie os seus em `.brito/agents/*.md`.
 - **Servidor MCP.** `brito mcp-serve` expõe grafo, memória e skills a outros clientes MCP, como o Claude Code. As tools de consulta são marcadas `alwaysLoad`, para não ficarem escondidas atrás da busca de tools.
 
@@ -39,11 +40,12 @@ flowchart LR
 - **Skills**: procedimentos passo a passo para o *seu* projeto (comandos, ordem, armadilhas, como verificar). O agente carrega uma com `skill_load` antes de uma tarefa que ela cobre.
 - **Journal**: o Brito lembra entre sessões quais tarefas se repetiram, o melhor indício de que um procedimento é geral e vale guardar.
 
-## Skills que você revisa, sem mágica
+## Skills que merecem o lugar
 
 ![Revisando uma skill pendente, com aviso de comando destrutivo](docs/images/skills-review.png)
 
-1. Uma proposta aparece em `/skills pending`, sinalizada quando contém comandos destrutivos.
+0. **Caminho autônomo (padrão).** A reflexão grava a skill nova como *em teste*, marcada "(em teste)" no índice. Cada turno que a carrega conta como vitória (sem erro→conserto nem correção do usuário) ou falha. 3 vitórias (e no máximo 1 falha a cada 3 vitórias) a promovem; 2 falhas sem mais vitórias, ou 21 dias sem uso, a arquivam em `.brito/skills/.trash`. O Brito imprime uma linha a cada promoção ou arquivamento. Limites: no máximo 3 skills automáticas novas por dia, só no escopo do projeto, e uma consolidação semanal automática que só mexe em skills automáticas.
+1. **Caminho de revisão.** Skills com comandos destrutivos, e mudanças em skills que você aprovou, aparecem em `/skills pending`, sinalizadas quando contêm comandos destrutivos.
 2. `/skills approve <nome>` mostra o **corpo inteiro** e os avisos do lint, e pede confirmação. Essa confirmação é exigida mesmo no modo "tudo liberado".
 3. Skills aprovadas são versionadas (`history/`), ranqueadas por uso e sinalizadas quando os arquivos que citam deixam de existir. `/skills consolidate` junta duplicadas e poda as sem uso.
 4. Uma skill pode ser do projeto ou **global** (vale em todos os projetos); `/skills promote` move uma para global.
@@ -133,7 +135,7 @@ O Brito **não tem drivers de banco e não se conecta a nada sozinho**. Quando p
 
 ## Configuração
 
-`BRITO_MODEL`, `BRITO_EFFORT`, `BRITO_EXPLORE_MODEL`, `BRITO_LEARN_MODEL`, `BRITO_HOME` (onde ficam skills globais e histórico), `BRITO_CONFIG`, `BRITO_COLOR`, `BRITO_BANNER` (`compact` ou `full`; padrão: tela cheia em janelas de 95+ colunas e 28+ linhas), `BRITO_INDEX_IGNORED`, `BRITO_SKILL_MIN_TOOLS` (tamanho mínimo do turno para disparar a reflexão quando nada mais dispara).
+`BRITO_MODEL`, `BRITO_EFFORT`, `BRITO_EXPLORE_MODEL`, `BRITO_LEARN_MODEL`, `BRITO_HOME` (onde ficam skills globais e histórico), `BRITO_CONFIG`, `BRITO_COLOR`, `BRITO_BANNER` (`compact` ou `full`; padrão: tela cheia em janelas de 95+ colunas e 28+ linhas), `BRITO_INDEX_IGNORED`, `BRITO_SKILL_MIN_TOOLS` (tamanho mínimo do turno para disparar a reflexão quando nada mais dispara), `BRITO_SKILLS` (`auto` padrão, `ask`, `off`), `BRITO_SHELL` (shell da tool `bash`; no Windows usa o Git Bash se instalado).
 
 Os dados do projeto ficam em `.brito/` (grafo, skills do projeto, agentes) e os globais em `~/.brito`. O grafo, a memória e as skills ficam na sua máquina; como em qualquer agente de código, o código que o modelo lê é enviado ao provedor de modelo que você configurou.
 

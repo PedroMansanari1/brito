@@ -1,3 +1,4 @@
+import { droppedImages } from "../util/images.js";
 import fs from "node:fs";
 import path from "node:path";
 import stringWidth from "string-width";
@@ -27,7 +28,7 @@ const ANSI = /\x1b\[[0-9;]*[A-Za-z]/y;
 
 const MAX_INPUT_ROWS = 8;
 const MAX_MENU = 7;
-const PASTE_RE = /\[colado #(\d+): [^\]]*\]/g;
+const PASTE_RE = /\[(?:colado|imagem) #(\d+): [^\]]*\]/g;
 
 export class Dock {
   onSubmit: (line: string) => void = () => {};
@@ -354,7 +355,13 @@ export class Dock {
   private finishPaste() {
     const text = this.pasteBuf.replace(/\r\n?/g, "\n");
     const lines = text.split("\n").length;
-    if (lines >= 2 || text.length > 300) {
+    // Arrastar uma imagem para o terminal cola o caminho dela: vira um marcador curto que volta a ser o caminho no envio.
+    const imgs = droppedImages(text);
+    if (imgs.length) {
+      const n = ++this.pasteN;
+      this.pastes.set(n, imgs.map((i) => (/\s/.test(i.path) ? `"${i.path}"` : i.path)).join(" "));
+      this.insert(`[imagem #${n}: ${imgs.length === 1 ? imgs[0].name : `${imgs.length} imagens`}] `);
+    } else if (lines >= 2 || text.length > 300) {
       const n = ++this.pasteN;
       this.pastes.set(n, text);
       const size = text.length >= 1000 ? `${(text.length / 1000).toFixed(1)}K` : String(text.length);

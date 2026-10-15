@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:" />
+  <title>Brito</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="drag"></div>
+      <div class="tabs"><span class="tab on">SESSÕES</span></div>
+      <button class="nav" id="new-session"><span class="ico">✎</span> Nova sessão <kbd>⌘N</kbd></button>
+      <input id="search" placeholder="Buscar sessões…" autocomplete="off" />
+      <div class="section"><span>PROJETOS</span><button id="add-project" title="Adicionar pasta">＋</button></div>
+      <div id="projects"></div>
+    </aside>
+    <main>
+      <header id="topbar"><span id="title">Brito</span><span id="meta"></span></header>
+      <section id="chat"><div id="messages"></div></section>
+      <footer>
+        <div id="composer">
+          <textarea id="input" rows="1" placeholder="O que vamos construir?"></textarea>
+          <div id="controls">
+            <select id="mode" title="Permissões">
+              <option value="manual">Perguntar</option>
+              <option value="auto">Editar sozinho</option>
+              <option value="plan">Planejar</option>
+              <option value="bypass">Tudo liberado</option>
+            </select>
+            <select id="model" title="Modelo">
+              <option value="">Padrão</option>
+              <option value="fable">Fable</option>
+              <option value="opus">Opus</option>
+              <option value="sonnet">Sonnet</option>
+              <option value="haiku">Haiku</option>
+            </select>
+            <select id="effort" title="Esforço de raciocínio">
+              <option value="">Auto</option>
+              <option value="low">Baixo</option>
+              <option value="medium">Médio</option>
+              <option value="high">Alto</option>
+              <option value="max">Máx</option>
+            </select>
+            <button id="send" title="Enviar (Enter)">↑</button>
+          </div>
+        </div>
+        <div id="status"><span id="st-backend"></span><span id="st-dir"></span><span id="st-usage"></span></div>
+      </footer>
+    </main>
+  </div>
+  <div id="modal" hidden><div class="card">
+    <h3>Permissão</h3><pre id="modal-text"></pre>
+    <div class="row"><button id="deny">Negar</button><button id="allow" class="primary">Permitir</button></div>
+  </div></div>
+  <script src="markdown.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

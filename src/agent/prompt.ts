@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { shellNote } from "../util/platform.js";
 
 /**
  * Frase sobre o grafo para o system prompt. "0 símbolos" sem contexto faz o modelo concluir que o grafo é inútil, mas o
@@ -36,7 +37,7 @@ export function buildSystemPrompt(root: string, graphStats: string, skills = "")
 
 # Ambiente
 Diretório do projeto: ${root}
-Data: ${new Date().toISOString().slice(0, 10)}${skills ? `\n\n# Skills disponíveis (use skill_load)\n${skills}` : ""}${projectDoc}`;
+Data: ${new Date().toISOString().slice(0, 10)}${shellNote()}${skills ? `\n\n# Skills disponíveis (use skill_load)\n${skills}` : ""}${projectDoc}`;
 }
 
 import type { AgentDef } from "./agents.js";

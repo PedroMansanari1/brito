@@ -1,12 +1,15 @@
 import { z } from "zod";
 import fs from "node:fs";
 import path from "node:path";
-import fg from "fast-glob";
+import { glob as fg } from "tinyglobby";
 import { defineTool } from "./registry.js";
 
 const abs = (root: string, p: string) => {
   const full = path.resolve(root, p);
-  if (!full.startsWith(path.resolve(root))) throw new Error("Caminho fora do projeto.");
+  // path.relative cobre dois defeitos do startsWith: irmão com mesmo prefixo (/proj vs /proj-x) e, no Windows,
+  // diferença de caixa na letra da unidade ou nos diretórios (C:\ vs c:\), que fazia caminhos válidos serem recusados.
+  const rel = path.relative(path.resolve(root), full);
+  if (rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel)) throw new Error("Caminho fora do projeto.");
   return full;
 };
 

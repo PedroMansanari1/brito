@@ -8,6 +8,7 @@ export function sandbox() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "brito-root-"));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "brito-home-"));
   process.env.BRITO_HOME = home;
+  process.env.BRITO_SKILLS = "ask"; // os testes antigos esperam o fluxo com aprovação; os do modo autônomo ligam "auto"
   const ctx = { root, graph: {} as any, ask: async () => true, sync: async () => {}, dirty: false, loadedSkills: new Set<string>() } as ToolContext;
   return { root, home, ctx, cleanup: () => { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(home, { recursive: true, force: true }); } };
 }

@@ -1,6 +1,6 @@
 {
   "name": "brito-cli",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Coding-agent CLI with a code knowledge graph, memory and reviewable skills / CLI de agente de código com grafo de conhecimento, memória e skills revisáveis",
   "type": "module",
   "bin": {
@@ -13,21 +13,26 @@
     "test": "tsx --test test/*.test.ts",
     "eval:learn": "tsx test/eval-learn.ts",
     "prepare": "tsc",
-    "prepublishOnly": "npm run typecheck && npm test"
+    "prepublishOnly": "npm run typecheck && npm test",
+    "desktop": "npm run build && npm run bundle && npm --prefix desktop install --no-audit --no-fund && npm --prefix desktop start",
+    "bundle": "node build-bundle.mjs",
+    "desktop:app": "npm run build && npm run bundle && npm --prefix desktop install --no-audit --no-fund && node desktop/package.mjs --install",
+    "desktop:dmg": "npm run build && npm run bundle && npm --prefix desktop install --no-audit --no-fund && node desktop/package.mjs --dmg"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",
     "@modelcontextprotocol/sdk": "^1.32.0",
     "commander": "latest",
-    "fast-glob": "latest",
     "kuzu": "latest",
     "string-width": "^8.3.0",
+    "tinyglobby": "^0.2.17",
     "tree-sitter-wasms": "latest",
     "web-tree-sitter": "0.24.7",
     "zod": "latest"
   },
   "devDependencies": {
     "@types/node": "latest",
+    "esbuild": "^0.28.2",
     "tsx": "latest",
     "typescript": "latest"
   },
@@ -46,6 +51,7 @@
   },
   "files": [
     "dist",
+    "!dist/cli.bundle.mjs",
     ".brito/agents",
     "README.md",
     "README.pt-BR.md",
@@ -64,5 +70,8 @@
     "svelte",
     "typescript",
     "python"
-  ]
+  ],
+  "overrides": {
+    "tar": "^7.5.22"
+  }
 }

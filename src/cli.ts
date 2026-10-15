@@ -17,12 +17,14 @@ import { indexProject } from "./graph/indexer.js";
 import { Agent, MODEL } from "./agent/loop.js";
 import { EFFORTS, MODEL_ALIASES, MODEL_HELP, effortLabel, initialEffort, isEffort, loadReasoningDisplay, parseModelArgs, saveEffort, saveModel, saveReasoningDisplay, type Effort, type ModelScope } from "./model.js";
 import { hasClaudeCli, ClaudeSession } from "./agent/claude-cli.js";
+import { startApprovalServer } from "./agent/approval.js";
 import { serveMcp } from "./mcp/server.js";
 import "./tools/skills.js";
 import type { ToolContext } from "./tools/registry.js";
 import { approvePending, lintSkill, listPending, listSkills, rejectPending, skillsIndex, staleRefs } from "./skills/store.js";
-import { applyProposal, describeProposal, proposeConsolidation, pruneCandidates, type Proposal } from "./skills/consolidate.js";
-import { defaultComplete, reflect, shouldReflect, type Complete } from "./skills/learn.js";
+import { applyProposal, autoConsolidate, describeProposal, proposeConsolidation, pruneCandidates, type Proposal } from "./skills/consolidate.js";
+import { defaultComplete, recordOutcomes, reflect, shouldReflect, type Complete } from "./skills/learn.js";
+import { expireTrials, skillsMode } from "./skills/trial.js";
 import { claudeCliComplete } from "./skills/learn-cli.js";
 import type { TurnRecord } from "./agent/loop.js";
 import { buildSystemPrompt, graphStatsLine } from "./agent/prompt.js";
@@ -30,7 +32,8 @@ import { allTools } from "./tools/registry.js";
 import { ui, c, fmtTokens } from "./ui/ui.js";
 import { runRepl, type ReplBackend } from "./repl.js";
 
-const program = new Command().name("brito").description("CLI de agentes de desenvolvimento com grafo de conhecimento").enablePositionalOptions();
+const pkgVersion = (JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
+const program = new Command().name("brito").description("CLI de agentes de desenvolvimento com grafo de conhecimento").version(pkgVersion, "-v, --version", "mostra a versão").enablePositionalOptions();
 
 const rootOf = (o: { dir?: string }) => path.resolve(o.dir ?? process.cwd());
 
@@ -47,6 +50,13 @@ program
     console.log(`OK: ${s.files} arquivos, ${s.symbols} símbolos, ${s.calls} chamadas, ${s.imports} imports | +${s.added} ~${s.changed} -${s.removed} =${s.unchanged} (${Date.now() - t}ms)`);
     await g.close();
   });
+
+program
+  .command("gui-serve", { hidden: true })
+  .description("Backend do app desktop (JSON por stdio)")
+  .option("-d, --dir <dir>")
+  .option("--resume <id>", "retoma uma conversa do claude")
+  .action(async (o) => { const { serveDesktop } = await import("./desktop/serve.js"); await serveDesktop(rootOf(o), o.resume); });
 
 program
   .command("query <cypher>")
@@ -83,38 +93,6 @@ async function plainAsk(q: string): Promise<boolean> {
 }
 
 /** Sem API key: o `claude` oficial (login da assinatura) faz o modelo; grafo/memória/skills chegam via MCP. */
-/**
- * Aprovações do claude CLI: o claude chama a tool MCP `approve` (--permission-prompt-tool), que roda no
- * processo do servidor MCP e consulta ESTE processo por um socket unix, onde está o terminal.
- */
-function startApprovalServer(io: { ask: (q: string, opts?: { force?: boolean }) => Promise<boolean> }): { path: string; close: () => void } {
-  const sock = path.join(os.tmpdir(), `brito-approve-${process.pid}.sock`);
-  try { fs.unlinkSync(sock); } catch { /* não existia */ }
-  const server = net.createServer((conn) => {
-    let buf = "";
-    conn.on("data", async (d) => {
-      buf += d.toString();
-      const nl = buf.indexOf("\n");
-      if (nl < 0) return;
-      let reply: { allow: boolean; message?: string };
-      try {
-        const req = JSON.parse(buf.slice(0, nl)) as { tool_name: string; input: unknown };
-        const plan = req.tool_name === "ExitPlanMode";
-        const ok = await io.ask(describeClaudeTool(req.tool_name, req.input), { force: plan });
-        if (ok && plan) perms.mode = "manual";
-        reply = ok ? { allow: true } : { allow: false, message: plan ? "Plano não aprovado pelo usuário. Pergunte o que ajustar." : "O usuário negou a execução." };
-      } catch (e: any) { reply = { allow: false, message: `erro no pedido de aprovação: ${e?.message ?? e}` }; }
-      conn.end(JSON.stringify(reply) + "\n");
-    });
-    conn.on("error", () => {});
-  });
-  server.listen(sock);
-  server.unref();
-  const close = () => { server.close(); try { fs.unlinkSync(sock); } catch { /* já removido */ } };
-  process.on("exit", close);
-  return { path: sock, close };
-}
-
 /** Menus ↑↓+Enter do `/model`: modelo e depois escopo. null = cancelado. */
 async function pickModel(current: string): Promise<{ model: string; scope: ModelScope } | null> {
   const models = Object.entries(MODEL_ALIASES);
@@ -285,7 +263,7 @@ const skillsCommand = (root: string, io: { ask: (q: string, opts?: { force?: boo
     const skills = listSkills(root);
     for (const s of skills) {
       const stale = staleRefs(root, s);
-      ui.print(`  ${c.soft(s.name)} ${c.muted(`(${s.scope}) v${s.version} · ${s.uses} usos · último uso ${s.lastUsed} · ${s.description}`)}${stale.length ? " " + c.warn(`⚠ refs obsoletas: ${stale.join(", ")}`) : ""}`);
+      ui.print(`  ${c.soft(s.name)} ${c.muted(`(${s.scope}) v${s.version} · ${s.uses} usos${s.origin === "auto" ? ` · ${s.status === "trial" ? "em teste" : "automática"} ${s.wins}✓/${s.losses}✗` : ""} · último uso ${s.lastUsed} · ${s.description}`)}${stale.length ? " " + c.warn(`⚠ refs obsoletas: ${stale.join(", ")}`) : ""}`);
     }
     const prune = pruneCandidates(skills);
     if (prune.length) ui.info(`${prune.length} candidata(s) a poda (sem uso há mais de 30 dias): /skills consolidate`);
@@ -298,6 +276,8 @@ function makeLearner(getTurns: () => TurnRecord[], ctx: ToolContext, complete: C
   return async (force = false) => {
     const turns = getTurns();
     const turn = turns[turns.length - 1] ?? null;
+    // O resultado do turno vira evidência para as skills usadas nele (promoção/arquivamento), antes de refletir.
+    if (!force) for (const n of [...recordOutcomes(turn, ctx), ...(skillsMode() === "off" ? [] : expireTrials(ctx.root))]) ui.print(c.ok("✦ ") + n);
     if (!force && !shouldReflect(turn, ctx)) { ctx.loadedSkills?.clear(); return; }
     if (!turn) { ui.info("Nada para refletir ainda."); return; }
     ui.info("✦ refletindo sobre a tarefa para extrair skills…");
@@ -307,6 +287,9 @@ function makeLearner(getTurns: () => TurnRecord[], ctx: ToolContext, complete: C
       ui.turnEnd(false);
       for (const n of notes) ui.print(c.ok("✦ ") + n);
       if (!notes.length) ui.info("✦ nenhuma skill nova");
+      if (skillsMode() === "auto") {
+        try { for (const n of await autoConsolidate(ctx.root, model, complete)) ui.print(c.ok("✦ ") + n); } catch { /* manutenção é opcional */ }
+      }
     } catch (e: any) { ui.turnEnd(false); ui.error(`reflexão falhou: ${e?.message ?? e}`); }
   };
 }
@@ -393,6 +376,9 @@ program
   .option("-d, --dir <dir>", "raiz do projeto")
   .option("-y, --yes", "aprovar edições e comandos automaticamente")
   .action(async (promptParts: string[], o) => {
+    // Trava anti-recursão: um brito iniciado por dentro de um claude que o próprio brito lançou (BRITO_DEPTH) pode abrir
+    // outro claude, e assim por diante. Dois níveis bastam; mais que isso é laço de processos.
+    if (Number(process.env.BRITO_DEPTH ?? 0) >= 2) { console.error("brito aninhado demais (BRITO_DEPTH): abortando para evitar laço de processos."); process.exit(1); }
     if (!process.env.ANTHROPIC_API_KEY) {
       if (!hasClaudeCli()) { console.error(c.err("Defina ANTHROPIC_API_KEY ou instale o Claude Code e rode `claude` → /login.")); process.exit(1); }
       await runViaClaude(rootOf(o), promptParts, !!o.yes);
@@ -472,7 +458,8 @@ program
     });
   });
 
-program.parseAsync().catch((e) => {
+// from: "node" explícito: dentro do Electron (ELECTRON_RUN_AS_NODE) o commander trataria o caminho do script como argumento.
+program.parseAsync(process.argv, { from: "node" }).catch((e) => {
   if (e instanceof GraphLockedError) { console.error(c.err("✗ ") + e.message); process.exit(1); }
   throw e;
 });

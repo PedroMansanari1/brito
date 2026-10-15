@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Added
+- **Images by drag and drop.** Dropping an image file onto the terminal (or typing/pasting its path, quoted, backslash-escaped or `file://`) attaches it to the turn, like Claude Code. PNG, JPEG, GIF and WebP up to 5 MB, at most 5 per message. The prompt shows a short `[imagem #1: name.png]` marker instead of the long path. With an API key the image goes to the model as an `image` block; with the `claude` CLI backend Brito grants Read access to the image's folder and tells the model to open it. Images no longer inflate the context estimate (they would have triggered compaction on every turn).
+
+## 0.4.0 — 2026-10-15
+
+### Added
+- **Autonomous skill learning** (`BRITO_SKILLS=auto`, now the default; `ask` keeps the old approve-everything flow, `off` disables learning). The reflection after a turn saves new skills *in trial* without asking. Each later turn that loads a trial skill counts as a win (no error-then-fix, no user correction) or a loss: 3 wins promote it to active, 2 losses (without more wins) or 21 idle days archive it to `.brito/skills/.trash`. An active automatic skill is archived if it starts failing (3+ losses above its wins).
+- Safety rails: automatic skills are project-scoped only; at most 3 new ones per day; a change to a skill you approved, or any content with destructive commands, goes to `/skills pending` instead; the lint still applies; a weekly automatic consolidation (6+ skills) only merges or prunes automatic skills.
+- Skill front matter gains `status` (`trial`/`active`), `origin` (`auto`/`manual`), `wins` and `losses`; old skills read as active and manual. `/skills` shows the score; the skills index tags trial skills "(em teste)".
+- `brito --version` / `-v`.
+
+### Changed
+- Skills approved by a human (`/skills approve`, `skill_save` with approval) are always `active` and `manual`, and are never promoted, archived or rewritten automatically.
+
+### Fixed (Windows)
+- Approvals through the `claude` CLI backend no longer hang: the approval server listened on a unix socket in `%TEMP%`, which Windows does not accept. It now uses a named pipe (`\\.\pipe\brito-approve-<pid>`).
+- The `claude` installed through npm (a `claude.cmd` shim) is now found and run, so the subscription backend no longer disappears silently. Brito resolves the shim's real target instead of using `shell: true`, which would break the quoting of the system prompt and the MCP config.
+- The `bash` tool and `!command` use Git Bash when it is installed (or `BRITO_SHELL`), and the model is told when the shell is `cmd.exe`.
+- Ctrl+C during a turn is reported as "interrupted" instead of an error (Windows kills the child without a signal).
+- The "path outside the project" check compared strings with `startsWith`, which rejected valid paths when the drive letter or directory casing differed (`C:\` vs `c:\`) and accepted sibling directories sharing a prefix (`/proj-x` inside `/proj`) on every system. It now uses `path.relative`.
+- Windows is now a documented target (see README); it has so far been exercised only by fixtures and one user report.
+
+## 0.3.2 — 2026-10-11
+
 ### Fixed
 - Two Brito processes on the same project no longer crash with a raw Kùzu stack trace (`Could not set lock on file`). The graph database accepts one process at a time, so opening it now waits up to 4 s for the other process to let go (covers short overlaps) and, if it is still busy, exits with a clear message saying another Brito (another terminal, or a Claude Code session using Brito) is using the project.
 

@@ -14,10 +14,11 @@ Brito is a terminal agent for software development. Instead of grepping and read
 
 - **Graph-first exploration.** `graph_search`, `graph_context`, `graph_callers`, `graph_callees` and `graph_impact` answer "where is it, who uses it, what breaks" without reading whole files. The graph is embedded ([Kùzu](https://kuzudb.com)), local and incremental.
 - **Wide coverage.** TypeScript/JavaScript, Python and the script blocks of `.svelte`, `.vue` and `.astro` components. Import aliases (`tsconfig` paths, `package.json` imports, SvelteKit's `$lib`) become real edges. Files ignored by `.gitignore` stay out.
-- **Skills that learn, with a human in the loop.** After a complex task Brito reflects on what happened and *proposes* skills. Nothing becomes active until you run `/skills approve`.
+- **Skills that learn on their own, on probation.** After a task that tripped or was corrected, Brito reflects and creates a skill *in trial* without interrupting you. A skill proves itself by use: 3 clean uses promote it, 2 stumbles archive it (recoverable). Anything risky, or any change to a skill you approved, still waits for your `/skills approve`. `BRITO_SKILLS=ask` restores approval-for-everything; `off` disables learning.
 - **Safety rails for what gets learned.** A lint rejects secrets, credentials embedded in URLs, `curl | sh` and prompt-injection phrasing, and **warns about destructive commands** (see below).
-- **Permission modes.** manual, auto-edits, plan and "everything allowed" (`Shift+Tab` cycles them). Even in the last one, skills are queued for review instead of being activated.
+- **Permission modes.** manual, auto-edits, plan and "everything allowed" (`Shift+Tab` cycles them). Autonomous skills do not depend on the mode: they are created in trial and judged by results.
 - **Two backends, one interface.** Use an Anthropic API key, or your Claude Code subscription through the `claude` CLI. Brito never reads or sends your subscription token.
+- **Images.** Drag an image file into the prompt (or paste its path) and it is attached to the turn: PNG, JPEG, GIF or WebP, up to 5 MB.
 - **Subagents.** `explore`, `plan` and `general` run in isolated contexts (read-only ones in parallel); add your own in `.brito/agents/*.md`.
 - **MCP server.** `brito mcp-serve` exposes the graph, memory and skills to other MCP clients such as Claude Code. The query tools are marked `alwaysLoad`, so they are not hidden behind tool search.
 
@@ -29,9 +30,13 @@ flowchart LR
     cg <-->|"graph_search · graph_callers<br/>graph_impact · graph_context"| agent{{"Brito agent"}}
     mem[("Memory<br/>decisions · conventions")] <-->|"recall / remember"| agent
     agent -->|"after a complex task"| learn["Reflection"]
-    learn -->|"proposes"| pending["Pending skills"]
-    pending -->|"/skills approve<br/>you decide"| skills[("Skills<br/>.brito/skills")]
+    learn -->|"creates"| trial["Skill in trial"]
+    trial -->|"3 clean uses"| skills[("Skills<br/>.brito/skills")]
+    trial -->|"2 stumbles or 21 idle days"| trash["Archived (.trash)"]
+    learn -->|"risky or changes yours"| pending["Pending<br/>/skills approve"]
+    pending --> skills
     skills -->|"skill_load"| agent
+    trial -->|"skill_load"| agent
 ```
 
 - **Code graph**: functions, classes, methods and components as nodes; `CALLS` and `IMPORTS` as edges. It re-parses only files whose hash changed and updates itself after edits.
@@ -39,11 +44,12 @@ flowchart LR
 - **Skills**: step-by-step procedures for *your* project (commands, order, traps, how to verify). The agent loads one with `skill_load` before a task it covers.
 - **Journal**: Brito remembers across sessions which tasks repeated, which is the best hint that a procedure is general and worth saving.
 
-## Skills you review, not magic
+## Skills that earn their place
 
 ![Reviewing a pending skill, with a destructive-command warning](docs/images/skills-review.png)
 
-1. A proposal appears in `/skills pending`, flagged when it contains destructive commands.
+0. **Autonomous path (default).** The reflection saves a new skill as *trial*, marked "(em teste)" in the index. Each turn that loads it counts as a win (no error-then-fix, no user correction) or a loss. 3 wins (and at most 1 loss per 3 wins) promote it; 2 losses without more wins, or 21 days unused, archive it to `.brito/skills/.trash`. Brito prints one line per promotion or archive. Limits: at most 3 new automatic skills a day, project scope only, and a weekly automatic consolidation that only touches automatic skills.
+1. **Review path.** Skills with destructive commands, and changes to skills you approved, appear in `/skills pending`, flagged when they contain destructive commands.
 2. `/skills approve <name>` shows the **whole body** and the lint warnings, then asks for confirmation. That confirmation is required even in "everything allowed" mode.
 3. Approved skills are versioned (`history/`), ranked by use, and flagged when the files they cite no longer exist. `/skills consolidate` merges duplicates and prunes unused ones.
 4. A skill can be project-scoped or **global** (valid in every project); `/skills promote` moves one to global.
@@ -52,7 +58,7 @@ The lint **rejects** secrets/tokens, absolute user paths, credentials in URLs (`
 
 ## Install
 
-Requires Node >= 20. Developed on macOS; Linux should work, Windows is untested.
+Requires Node >= 20. Developed on macOS; Linux should work. On Windows use `npm i -g brito-cli` (the `install.sh` script needs bash); install Git for Windows so the `bash` tool runs bash commands, otherwise it falls back to `cmd.exe` (override with `BRITO_SHELL`).
 
 ```bash
 # from npm (the command is `brito`)
@@ -133,7 +139,7 @@ Brito has **no database drivers and connects to nothing on its own**. When it ne
 
 ## Configuration
 
-`BRITO_MODEL`, `BRITO_EFFORT`, `BRITO_EXPLORE_MODEL`, `BRITO_LEARN_MODEL`, `BRITO_HOME` (where global skills and history live), `BRITO_CONFIG`, `BRITO_COLOR`, `BRITO_BANNER` (`compact` or `full`; default: full screen on windows of 95+ columns and 28+ rows), `BRITO_INDEX_IGNORED`, `BRITO_SKILL_MIN_TOOLS` (how long a turn must be to trigger reflection when nothing else does).
+`BRITO_MODEL`, `BRITO_EFFORT`, `BRITO_EXPLORE_MODEL`, `BRITO_LEARN_MODEL`, `BRITO_HOME` (where global skills and history live), `BRITO_CONFIG`, `BRITO_COLOR`, `BRITO_BANNER` (`compact` or `full`; default: full screen on windows of 95+ columns and 28+ rows), `BRITO_INDEX_IGNORED`, `BRITO_SKILL_MIN_TOOLS` (how long a turn must be to trigger reflection when nothing else does), `BRITO_SKILLS` (`auto` default, `ask`, `off`), `BRITO_SHELL` (shell used by the `bash` tool; on Windows defaults to Git Bash when installed).
 
 Project data lives in `.brito/` (graph, project skills, agents) and global data in `~/.brito`. The graph, memory and skills stay on your machine; as with any coding agent, the code the model reads is sent to the model provider you configured.
 

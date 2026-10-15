@@ -1,5 +1,5 @@
 import Parser from "web-tree-sitter";
-import fg from "fast-glob";
+import { glob as fg } from "tinyglobby";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
