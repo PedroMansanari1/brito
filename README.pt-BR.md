@@ -2,9 +2,9 @@
 
 [English](README.md) · **Português**
 
-> Uma CLI de agente de código que conhece o seu projeto como um **grafo** e aprende os procedimentos dele como **skills que você revisa**.
+> Um agente de código para o seu terminal (`brito-cli`) e para o seu desktop (um app nativo) que conhece o seu projeto como um **grafo** e aprende os procedimentos dele como **skills que você revisa**.
 
-O Brito é um agente de terminal para desenvolvimento de software. Em vez de dar `grep` e ler arquivos às cegas, ele mantém um **grafo de conhecimento do código** (símbolos, quem chama quem, quem importa quem) e responde perguntas como *"o que quebra se eu mudar isto?"* direto do grafo, em uma fração de segundo. Ele também guarda **notas de memória** e **skills**: procedimentos reutilizáveis aprendidos no seu próprio trabalho, que só passam a valer depois que **você** aprova.
+O Brito é um agente para desenvolvimento de software. Use no terminal (`brito-cli` no npm) ou como app de desktop (um executável para macOS, Windows e Linux): o mesmo agente, o mesmo grafo, as mesmas skills. Em vez de dar `grep` e ler arquivos às cegas, ele mantém um **grafo de conhecimento do código** (símbolos, quem chama quem, quem importa quem) e responde perguntas como *"o que quebra se eu mudar isto?"* direto do grafo, em uma fração de segundo. Ele também guarda **notas de memória** e **skills**: procedimentos reutilizáveis aprendidos no seu próprio trabalho, que só passam a valer depois que **você** aprova.
 
 ![Brito respondendo uma pergunta com o grafo de código](docs/images/answer-with-graph.png)
 
@@ -18,6 +18,7 @@ O Brito é um agente de terminal para desenvolvimento de software. Em vez de dar
 - **Proteções sobre o que é aprendido.** Um lint rejeita segredos, credenciais embutidas em URL, `curl | sh` e frases de injeção de prompt, e **avisa sobre comandos destrutivos** (veja abaixo).
 - **Modos de permissão.** manual, auto-edições, plano e "tudo liberado" (`Shift+Tab` alterna). As skills autônomas não dependem do modo: nascem em teste e são julgadas pelo resultado.
 - **Dois backends, uma interface.** Use uma chave da API da Anthropic ou a sua assinatura do Claude Code pela CLI `claude`. O Brito nunca lê nem envia o token da sua assinatura.
+- **Terminal ou app de desktop.** `npm i -g brito-cli` instala o comando `brito`; o app de desktop é um executável nativo com janela (projetos e sessões numa barra lateral, chat, pedidos de permissão), sem precisar de Node nem de terminal. Veja [Instalação](#instalação).
 - **Imagens.** Arraste um arquivo de imagem para o prompt (ou cole o caminho) e ele é anexado ao turno: PNG, JPEG, GIF ou WebP, até 5 MB.
 - **Subagentes.** `explore`, `plan` e `general` rodam em contextos isolados (os somente-leitura, em paralelo); crie os seus em `.brito/agents/*.md`.
 - **Servidor MCP.** `brito mcp-serve` expõe grafo, memória e skills a outros clientes MCP, como o Claude Code. As tools de consulta são marcadas `alwaysLoad`, para não ficarem escondidas atrás da busca de tools.
@@ -54,6 +55,8 @@ O lint **rejeita** segredos/tokens, caminhos absolutos do usuário, credenciais 
 
 ## Instalação
 
+### Terminal (`brito-cli`)
+
 Requer Node >= 20. Desenvolvido no macOS; no Linux deve funcionar, no Windows não foi testado.
 
 ```bash
@@ -77,6 +80,24 @@ Escolha um backend:
 export ANTHROPIC_API_KEY=sk-ant-...      # API da Anthropic
 # ou: instale o Claude Code, rode `claude` e /login — o Brito usa a sua assinatura
 ```
+
+### App de desktop (executável)
+
+O mesmo agente numa janela: projetos e sessões numa barra lateral, chat com markdown, chamadas de ferramenta recolhíveis, pedidos de permissão e seletores de modelo, esforço e modo de permissão. Não precisa de Node nem de terminal.
+
+Baixe na [página de Releases](https://github.com/wilsonbrito/brito/releases):
+
+| Sistema | Arquivo |
+|---|---|
+| macOS | `Brito-<versão>-macos-arm64.dmg` (Apple Silicon) ou `-x64.dmg` (Intel): abra e arraste o Brito para Aplicativos |
+| Windows | `Brito-<versão>-windows-x64-setup.exe` |
+| Linux | `Brito-<versão>-linux-x64.tar.gz`: extraia e rode `./install.sh` (coloca o Brito no menu de aplicativos) |
+
+Os pacotes não são assinados com Apple Developer ID nem com certificado do Windows, então o macOS ("desenvolvedor não identificado": botão direito, depois Abrir) e o SmartScreen do Windows avisam na primeira abertura. O macOS é a plataforma mais testada; os pacotes de Windows e Linux saem do CI e foram menos exercitados.
+
+Como na versão de terminal, ele usa a `ANTHROPIC_API_KEY` se o seu shell a exporta; senão, a sua assinatura do Claude Code (`claude`, depois `/login`). Aberto pelo Finder, o app lê o seu shell de login para encontrá-las.
+
+Para compilar você mesmo: `npm run desktop` (desenvolvimento), `npm run desktop:app` (macOS: instala `/Applications/Brito.app`) ou `npm run desktop:dmg`.
 
 ## Começando
 
@@ -141,7 +162,8 @@ Os dados do projeto ficam em `.brito/` (grafo, skills do projeto, agentes) e os 
 
 ## Limitações
 
-- Software em fase inicial (v0.3.1), um mantenedor.
+- Software em fase inicial (v0.5.0), um mantenedor.
+- O app de desktop é novo: uma janela só (sem abas ainda) e, com chave de API (sem o `claude` CLI), o modelo não retoma a conversa ao reabrir o app, embora a tela a mostre.
 - **A interface e o idioma padrão do agente são português do Brasil.** Traduzi-los é uma contribuição bem-vinda.
 - O aprendizado de skills é heurístico: ele propõe, você decide. Espere rejeitar algumas propostas.
 
@@ -163,6 +185,8 @@ npm test             # 190+ testes, incluindo um servidor MCP real e um REPL rea
 | `src/tools/` | tools de grafo, memória, skills, arquivos e shell |
 | `src/mcp/` | servidor MCP |
 | `src/repl.ts`, `src/ui/` | interface de terminal |
+| `src/desktop/` | `brito gui-serve`: o backend com que a janela do desktop conversa (JSON por stdio) |
+| `desktop/` | janela Electron e empacotamento (`package.mjs`); `npm run bundle` gera o backend em arquivo único que ela usa |
 
 ## Licença
 

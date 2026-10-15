@@ -2,9 +2,9 @@
 
 **English** · [Português](README.pt-BR.md)
 
-> A coding-agent CLI that knows your codebase as a **graph** and learns your project's procedures as **skills you review**.
+> A coding agent for your terminal (`brito-cli`) and your desktop (a native app) that knows your codebase as a **graph** and learns your project's procedures as **skills you review**.
 
-Brito is a terminal agent for software development. Instead of grepping and reading files blindly, it keeps a **knowledge graph of your code** (symbols, who calls whom, who imports whom) and answers questions like *"what breaks if I change this?"* straight from the graph, in a fraction of a second. It also keeps **memory notes** and **skills**: reusable procedures learned from your own work, which only become active after **you** approve them.
+Brito is an agent for software development. Use it in the terminal (`brito-cli` on npm) or as a desktop app (an executable for macOS, Windows and Linux): same agent, same graph, same skills. Instead of grepping and reading files blindly, it keeps a **knowledge graph of your code** (symbols, who calls whom, who imports whom) and answers questions like *"what breaks if I change this?"* straight from the graph, in a fraction of a second. It also keeps **memory notes** and **skills**: reusable procedures learned from your own work, which only become active after **you** approve them.
 
 ![Brito answering a question with the code graph](docs/images/answer-with-graph.png)
 
@@ -18,6 +18,7 @@ Brito is a terminal agent for software development. Instead of grepping and read
 - **Safety rails for what gets learned.** A lint rejects secrets, credentials embedded in URLs, `curl | sh` and prompt-injection phrasing, and **warns about destructive commands** (see below).
 - **Permission modes.** manual, auto-edits, plan and "everything allowed" (`Shift+Tab` cycles them). Autonomous skills do not depend on the mode: they are created in trial and judged by results.
 - **Two backends, one interface.** Use an Anthropic API key, or your Claude Code subscription through the `claude` CLI. Brito never reads or sends your subscription token.
+- **Terminal or desktop app.** `npm i -g brito-cli` gives you the `brito` command; the desktop app is a native executable with a window (projects and sessions in a sidebar, chat, permission prompts), no Node or terminal needed. See [Install](#install).
 - **Images.** Drag an image file into the prompt (or paste its path) and it is attached to the turn: PNG, JPEG, GIF or WebP, up to 5 MB.
 - **Subagents.** `explore`, `plan` and `general` run in isolated contexts (read-only ones in parallel); add your own in `.brito/agents/*.md`.
 - **MCP server.** `brito mcp-serve` exposes the graph, memory and skills to other MCP clients such as Claude Code. The query tools are marked `alwaysLoad`, so they are not hidden behind tool search.
@@ -58,6 +59,8 @@ The lint **rejects** secrets/tokens, absolute user paths, credentials in URLs (`
 
 ## Install
 
+### Terminal (`brito-cli`)
+
 Requires Node >= 20. Developed on macOS; Linux should work. On Windows use `npm i -g brito-cli` (the `install.sh` script needs bash); install Git for Windows so the `bash` tool runs bash commands, otherwise it falls back to `cmd.exe` (override with `BRITO_SHELL`).
 
 ```bash
@@ -81,6 +84,24 @@ Pick a backend:
 export ANTHROPIC_API_KEY=sk-ant-...      # Anthropic API
 # or: install Claude Code, run `claude` and /login — Brito will use your subscription
 ```
+
+### Desktop app (executable)
+
+The same agent in a window: projects and sessions in a sidebar, chat with markdown, collapsible tool calls, permission prompts, and pickers for model, effort and permission mode. It needs neither Node nor a terminal.
+
+Download it from the [Releases page](https://github.com/wilsonbrito/brito/releases):
+
+| System | File |
+|---|---|
+| macOS | `Brito-<version>-macos-arm64.dmg` (Apple Silicon) or `-x64.dmg` (Intel): open it and drag Brito to Applications |
+| Windows | `Brito-<version>-windows-x64-setup.exe` |
+| Linux | `Brito-<version>-linux-x64.tar.gz`: extract it and run `./install.sh` (adds Brito to the applications menu) |
+
+The builds are not signed with an Apple Developer ID or a Windows certificate, so macOS ("unidentified developer": right-click, then Open) and Windows SmartScreen warn on the first launch. macOS is the platform exercised the most; the Windows and Linux builds come from CI and have had less testing.
+
+Like the terminal version, it uses `ANTHROPIC_API_KEY` when your shell exports it, otherwise your Claude Code subscription (`claude`, then `/login`). Opened from the Finder, the app reads your login shell to find them.
+
+To build it yourself: `npm run desktop` (development), `npm run desktop:app` (macOS: installs `/Applications/Brito.app`) or `npm run desktop:dmg`.
 
 ## Quick start
 
@@ -145,7 +166,8 @@ Project data lives in `.brito/` (graph, project skills, agents) and global data 
 
 ## Limitations
 
-- Early software (v0.3.1), one maintainer.
+- Early software (v0.5.0), one maintainer.
+- The desktop app is new: a single window (no tabs yet), and with an API key (no `claude` CLI) the model does not resume a conversation after you reopen the app, although the screen shows it.
 - **The interface and the agent's default language are Brazilian Portuguese.** Translating them is a welcome contribution.
 - Skill learning is a heuristic: it proposes, you decide. Expect some proposals to be rejected.
 
@@ -167,6 +189,8 @@ npm test             # 190+ tests, including a real MCP server and a real REPL
 | `src/tools/` | graph, memory, skills, filesystem and shell tools |
 | `src/mcp/` | MCP server |
 | `src/repl.ts`, `src/ui/` | terminal interface |
+| `src/desktop/` | `brito gui-serve`: the backend the desktop window talks to (JSON over stdio) |
+| `desktop/` | Electron window and packaging (`package.mjs`); `npm run bundle` builds the single-file backend it uses |
 
 ## License
 

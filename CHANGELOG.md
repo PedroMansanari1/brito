@@ -1,9 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-10-15
+
+Brito now comes in two forms: the `brito` command in the terminal (`brito-cli` on npm, as before) and a **desktop app**, a native executable for macOS, Windows and Linux.
 
 ### Added
+- **Desktop app** (`desktop/`, Electron). Projects and sessions in a sidebar, chat with markdown, collapsible tool calls, permission prompts, pickers for model, effort and permission mode, and a status bar with context and cost. Sessions are saved in `~/.brito/desktop.json`; with the `claude` backend they resume the same conversation when reopened. It runs the same agent through `brito gui-serve`, a backend that speaks JSON over stdio.
+- **Packaging.** `npm run desktop:app` builds and installs `Brito.app` (own icon) in `/Applications` on macOS; `npm run desktop:dmg` builds the `.dmg`. Linux gets a `.tar.gz` with an `install.sh` that adds Brito to the applications menu; Windows gets an Inno Setup installer. The GitHub Actions workflow `desktop` builds all of them and attaches them to a Release on `v*` tags (or on demand). Builds are unsigned unless the signing secrets are set.
+- **API-key backend in the desktop app.** With `ANTHROPIC_API_KEY` the app uses the API directly, otherwise your Claude Code subscription. Apps opened from the Finder read the login shell for `PATH` and the key.
 - **Images by drag and drop.** Dropping an image file onto the terminal (or typing/pasting its path, quoted, backslash-escaped or `file://`) attaches it to the turn, like Claude Code. PNG, JPEG, GIF and WebP up to 5 MB, at most 5 per message. The prompt shows a short `[imagem #1: name.png]` marker instead of the long path. With an API key the image goes to the model as an `image` block; with the `claude` CLI backend Brito grants Read access to the image's folder and tells the model to open it. Images no longer inflate the context estimate (they would have triggered compaction on every turn).
+
+### Changed
+- The agent emits turn events (text, thinking, tool calls) through a `TurnSink` instead of writing to the terminal; the terminal behaves as before. The approval server moved from `cli.ts` to `src/agent/approval.ts`.
+- The npm package no longer ships `dist/cli.bundle.mjs` (the single-file backend used only by the desktop app).
+
+### Fixed
+- Inside Electron (`ELECTRON_RUN_AS_NODE`), `commander` treated the script path as an argument, so a subcommand fell into the default mode and could spawn a `claude` per process. `parseAsync` now passes `{ from: "node" }`, and a `BRITO_DEPTH` guard aborts the default mode when nested more than two levels.
 
 ## 0.4.0 — 2026-10-15
 
