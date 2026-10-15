@@ -85,6 +85,10 @@ export ANTHROPIC_API_KEY=sk-ant-...      # API da Anthropic
 
 O mesmo agente numa janela: projetos e sessões numa barra lateral, chat com markdown, chamadas de ferramenta recolhíveis, pedidos de permissão e seletores de modelo, esforço e modo de permissão. Não precisa de Node nem de terminal.
 
+![App de desktop do Brito respondendo uma pergunta com o grafo de código](docs/images/desktop-app.png)
+
+*O app de desktop num projeto pequeno: uma pergunta, uma chamada ao grafo (a linha recolhida "executou 1 comando") e a resposta em tabela. A barra lateral agrupa as sessões por projeto; o rodapé mostra o backend, a pasta, o tamanho do contexto e o custo.*
+
 Baixe na [página de Releases](https://github.com/wilsonbrito/brito/releases):
 
 | Sistema | Arquivo |

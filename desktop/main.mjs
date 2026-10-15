@@ -102,10 +102,16 @@ app.whenReady().then(() => {
   fixPath(); createWindow();
   // Verificação sem mouse: BRITO_SHOT=/tmp/x.png [BRITO_SHOT_SEND="mensagem"] [BRITO_SHOT_WAIT=ms] tira um print e sai.
   if (process.env.BRITO_SHOT) win.webContents.once("did-finish-load", async () => {
-    await new Promise((r) => setTimeout(r, 800));
+    // espera a interface montar (sessão ativa na barra lateral) em vez de um atraso fixo: a partida a frio varia
+    for (let i = 0; i < 50 && !(await win.webContents.executeJavaScript('!!document.querySelector(".sess.on")')); i++) await new Promise((r) => setTimeout(r, 200));
     if (process.env.BRITO_SHOT_SEND) {
       await win.webContents.executeJavaScript(`document.getElementById("input").value=${JSON.stringify(process.env.BRITO_SHOT_SEND)};document.getElementById("send").click()`);
-      await new Promise((r) => setTimeout(r, Number(process.env.BRITO_SHOT_WAIT ?? 30000)));
+      // espera o turno terminar (o botão de enviar volta de "parar" para "enviar"), com teto em BRITO_SHOT_WAIT ms
+      const t0 = Date.now(), cap = Number(process.env.BRITO_SHOT_WAIT ?? 30000);
+      const busy = () => win.webContents.executeJavaScript('document.getElementById("send").classList.contains("stop")');
+      while (Date.now() - t0 < cap && !(await busy())) await new Promise((r) => setTimeout(r, 200)); // começou
+      while (Date.now() - t0 < cap && (await busy())) await new Promise((r) => setTimeout(r, 500));  // terminou
+      await new Promise((r) => setTimeout(r, 800));
     }
     fs.writeFileSync(process.env.BRITO_SHOT, (await win.webContents.capturePage()).toPNG());
     app.quit();

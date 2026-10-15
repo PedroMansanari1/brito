@@ -89,6 +89,10 @@ export ANTHROPIC_API_KEY=sk-ant-...      # Anthropic API
 
 The same agent in a window: projects and sessions in a sidebar, chat with markdown, collapsible tool calls, permission prompts, and pickers for model, effort and permission mode. It needs neither Node nor a terminal.
 
+![Brito desktop app answering a question with the code graph](docs/images/desktop-app.png)
+
+*The desktop app on a small project: one question, one graph call (the collapsed "ran 1 command" line), and the answer as a table. The sidebar groups sessions by project; the footer shows the backend, the folder, the context size and the cost.*
+
 Download it from the [Releases page](https://github.com/wilsonbrito/brito/releases):
 
 | System | File |
