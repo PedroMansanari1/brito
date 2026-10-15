@@ -109,7 +109,8 @@ test("reflect respeita o teto de 2 saves", async () => {
 test("fixtures do eval são TurnRecords válidos com expectativa conhecida", async () => {
   const fs = await import("node:fs");
   const path = await import("node:path");
-  const dir = path.join(path.dirname(new URL(import.meta.url).pathname), "fixtures/turns");
+  const { fileURLToPath } = await import("node:url");
+  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/turns"); // URL.pathname vira "/D:/..." no Windows
   const files = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));
   assert.ok(files.length >= 6);
   for (const f of files) {

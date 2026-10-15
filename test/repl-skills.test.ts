@@ -15,7 +15,8 @@ const strip = (s: string) => s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "");
 /** Envia as linhas, uma a uma, esperando o REPL absorver cada uma; devolve a saída sem cores. */
 function repl(root: string, home: string, lines: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(path.join(REPO, "node_modules/.bin/tsx"), [path.join(REPO, "src/cli.ts"), "-d", root], {
+    // node + cli do tsx: o .bin/tsx do Windows é um .cmd, que o spawn não executa sem shell
+    const child = spawn(process.execPath, [path.join(REPO, "node_modules/tsx/dist/cli.mjs"), path.join(REPO, "src/cli.ts"), "-d", root], {
       cwd: REPO, env: { ...process.env, ANTHROPIC_API_KEY: "dummy", NO_COLOR: "1", BRITO_HOME: home },
     });
     let out = "";
