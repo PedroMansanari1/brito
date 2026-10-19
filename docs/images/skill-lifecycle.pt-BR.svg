@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" lang="pt-BR" viewBox="0 0 1200 420" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif">
+  <title>Ciclo de vida da skill: de uma tarefa difícil a uma skill aprovada</title>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#445"/></marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#3f7a4f"/></marker>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#a24f6c"/></marker>
+    <marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7a58b5"/></marker>
+  </defs>
+  <rect width="1200" height="420" fill="#fff"/>
+
+  <!-- Task -->
+  <rect x="20" y="150" width="190" height="110" rx="14" fill="#e8edf7" stroke="#2c4f94" stroke-width="2"/>
+  <text x="115" y="185" text-anchor="middle" font-size="17" fill="#2c4f94" font-weight="600">Tarefa</text>
+  <text x="115" y="208" text-anchor="middle" font-size="12" fill="#445">tropeçou, foi corrigida</text>
+  <text x="115" y="226" text-anchor="middle" font-size="12" fill="#445">ou se repetiu entre sessões</text>
+
+  <line x1="210" y1="205" x2="262" y2="205" stroke="#445" stroke-width="3" marker-end="url(#a)"/>
+
+  <!-- Reflection -->
+  <rect x="266" y="150" width="170" height="110" rx="14" fill="#fff" stroke="#445" stroke-width="2"/>
+  <text x="351" y="185" text-anchor="middle" font-size="17" fill="#223" font-weight="600">Reflexão</text>
+  <text x="351" y="208" text-anchor="middle" font-size="12" fill="#445">escreve o rascunho</text>
+  <text x="351" y="226" text-anchor="middle" font-size="12" fill="#445">+ lint de segurança</text>
+
+  <!-- split -->
+  <path d="M436,190 C470,190 470,90 520,90" fill="none" stroke="#3f7a4f" stroke-width="3" marker-end="url(#ag)"/>
+  <path d="M436,225 C470,225 470,320 520,320" fill="none" stroke="#7a58b5" stroke-width="3" marker-end="url(#ap)"/>
+  <text x="462" y="104" text-anchor="end" font-size="12" fill="#3f7a4f">segura: caminho autônomo</text>
+  <text x="462" y="352" text-anchor="end" font-size="12" fill="#7a58b5">arriscada, ou altera</text><text x="462" y="368" text-anchor="end" font-size="12" fill="#7a58b5">uma que você aprovou</text>
+
+  <!-- Trial -->
+  <rect x="524" y="40" width="210" height="100" rx="14" fill="#fff7e0" stroke="#c99a1a" stroke-width="2"/>
+  <text x="629" y="72" text-anchor="middle" font-size="17" fill="#8a6700" font-weight="600">Em teste</text>
+  <text x="629" y="94" text-anchor="middle" font-size="12" fill="#445">marcada "(em teste)" no índice</text>
+  <text x="629" y="112" text-anchor="middle" font-size="12" fill="#445">cada uso: vitória ou derrota</text>
+
+  <!-- Pending -->
+  <rect x="524" y="270" width="210" height="100" rx="14" fill="#f0eaf8" stroke="#7a58b5" stroke-width="2"/>
+  <text x="629" y="302" text-anchor="middle" font-size="17" fill="#7a58b5" font-weight="600">Pendente</text>
+  <text x="629" y="324" text-anchor="middle" font-size="12" fill="#445">/skills pending mostra o</text>
+  <text x="629" y="342" text-anchor="middle" font-size="12" fill="#445">corpo inteiro + avisos do lint</text>
+
+  <!-- Skills -->
+  <rect x="900" y="150" width="270" height="110" rx="14" fill="#e9f1ea" stroke="#3f7a4f" stroke-width="3"/>
+  <text x="1035" y="185" text-anchor="middle" font-size="17" fill="#3f7a4f" font-weight="600">Skill ativa</text>
+  <text x="1035" y="208" text-anchor="middle" font-size="12" fill="#445">.brito/skills · versionada em history/</text>
+  <text x="1035" y="226" text-anchor="middle" font-size="12" fill="#445">carregada com skill_load</text>
+
+  <path d="M734,80 C830,80 830,170 896,180" fill="none" stroke="#3f7a4f" stroke-width="3" marker-end="url(#ag)"/>
+  <text x="740" y="160" font-size="12" fill="#3f7a4f" font-weight="600">3 usos limpos</text>
+
+  <path d="M734,330 C830,330 830,240 896,232" fill="none" stroke="#7a58b5" stroke-width="3" marker-end="url(#ap)"/>
+  <text x="772" y="352" font-size="12" fill="#7a58b5" font-weight="600">/skills approve (você confirma)</text>
+
+  <!-- Trash -->
+  <rect x="900" y="40" width="270" height="76" rx="14" fill="#f7ebef" stroke="#a24f6c" stroke-width="2"/>
+  <text x="1035" y="70" text-anchor="middle" font-size="17" fill="#a24f6c" font-weight="600">Arquivada (.trash)</text>
+  <text x="1035" y="90" text-anchor="middle" font-size="12" fill="#445">2 tropeços, ou 21 dias sem uso</text><text x="1035" y="106" text-anchor="middle" font-size="11" fill="#667">recuperável</text>
+  <text x="815" y="50" text-anchor="middle" font-size="12" fill="#a24f6c" font-weight="600">2 derrotas</text><line x1="734" y1="58" x2="896" y2="58" stroke="#a24f6c" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#ar)"/>
+</svg>

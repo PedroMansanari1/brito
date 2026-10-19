@@ -27,7 +27,7 @@ O Brito é um agente para desenvolvimento de software. Use no terminal (`brito-c
 
 ## Como funciona
 
-![Indexação uma vez, depois respostas vindas do grafo em vez de grep e leitura de arquivos](docs/images/graph-vs-grep.svg)
+![Indexação uma vez, depois respostas vindas do grafo em vez de grep e leitura de arquivos](docs/images/graph-vs-grep.pt-BR.svg)
 
 *O grafo é construído uma vez e atualizado de forma incremental; uma pergunta como "o que quebra se eu mudar isto?" vira uma ou duas chamadas ao grafo.*
 
@@ -49,13 +49,13 @@ flowchart LR
 
 ### Arquitetura em uma imagem
 
-![Arquitetura do Brito: contexto, permissões, ferramentas e subagentes ao redor do modelo](docs/images/architecture.svg)
+![Arquitetura do Brito: contexto, permissões, ferramentas e subagentes ao redor do modelo](docs/images/architecture.pt-BR.svg)
 
 *Tudo o que o modelo vê ou pode fazer é um dos oito componentes, agrupados por papel. O texto em monoespaçado é o arquivo ou comando real; a etiqueta diz quando ele entra em ação.*
 
 ## Skills que merecem o lugar
 
-![Ciclo de vida da skill: tarefa, reflexão, teste ou pendente, ativa ou arquivada](docs/images/skill-lifecycle.svg)
+![Ciclo de vida da skill: tarefa, reflexão, teste ou pendente, ativa ou arquivada](docs/images/skill-lifecycle.pt-BR.svg)
 
 *Os dois caminhos de uma skill. As seguras se provam em teste; as arriscadas esperam a sua aprovação.*
 
