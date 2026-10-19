@@ -103,6 +103,15 @@ async function plainAsk(q: string): Promise<boolean> {
   return /^(s|y)/i.test(a.trim());
 }
 
+/** Pergunta de sim/não (padrão: não) fora do REPL; só roda com terminal interativo. */
+async function migrationAsk(q: string): Promise<boolean> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  console.log(c.warn("⚠ ") + c.bold(c.soft(q)));
+  const a = await new Promise<string>((r) => rl.question(c.muted("  copiar? [s]im/[N]ão: "), r));
+  rl.close();
+  return /^(s|y)/i.test(a.trim());
+}
+
 /** Sem API key: o `claude` oficial (login da assinatura) faz o modelo; grafo/memória/skills chegam via MCP. */
 /** Menus ↑↓+Enter do `/model`: modelo e depois escopo. null = cancelado. */
 async function pickModel(current: string): Promise<{ model: string; scope: ModelScope } | null> {
@@ -312,6 +321,7 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean) {
   const io = { ask: async (q: string, _opts?: { force?: boolean }): Promise<boolean> => perms.mode === "bypass" || plainAsk(q) };
   const approval = startApprovalServer({ ask: (q, opts) => io.ask(q, opts) });
   // O banco aceita um único processo com acesso de escrita: indexa, lê as stats e solta o banco para o servidor MCP.
+  { const { offerNoteMigration } = await import("./graph/migrate.js"); await offerNoteMigration(root, (q) => migrationAsk(q), (m) => ui.info(m)); }
   const graph = await GraphStore.open(root);
   ui.info("sincronizando grafo…");
   await indexProject(root, graph);
@@ -397,6 +407,7 @@ program
     }
     const root = rootOf(o);
     const startedAt = Date.now();
+    { const { offerNoteMigration } = await import("./graph/migrate.js"); await offerNoteMigration(root, (q) => migrationAsk(q), (m) => ui.info(m)); }
     const graph = await GraphStore.open(root);
     // A contagem do prompt acompanha cada sincronização: sem isso o modelo veria "0 símbolos" a sessão inteira
     // em projeto que começou vazio e nasceu código depois.

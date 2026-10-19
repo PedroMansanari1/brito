@@ -53,3 +53,26 @@ export async function migrateNotes(root: string, log: (m: string) => void = () =
     } finally { await g.close(); }
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
+
+const markerOf = (root: string) => path.join(root, ".brito", ".notas-migradas");
+
+/** Só no primeiro uso depois da troca de motor: há grafo antigo, ainda não há grafo novo e a pergunta não foi respondida. */
+export function pendingNoteMigration(root: string): boolean {
+  const dir = path.join(root, ".brito");
+  return fs.existsSync(path.join(dir, "graph.kuzu")) && !fs.existsSync(path.join(dir, "graph.lbug")) && !fs.existsSync(markerOf(root));
+}
+
+/** Pergunta (uma vez por projeto) e migra as notas. Qualquer resposta, inclusive "não", encerra a pergunta; `brito migrar-notas` continua disponível. */
+export async function offerNoteMigration(root: string, ask: (q: string) => Promise<boolean>, log: (m: string) => void): Promise<void> {
+  if (!process.stdin.isTTY || !pendingNoteMigration(root)) return;
+  const yes = await ask("Este projeto tem um grafo antigo (Kùzu), que pode ter notas (memória). Copiar as notas para o grafo novo? Baixa o Kùzu (~100 MB) só desta vez.");
+  fs.writeFileSync(markerOf(root), new Date().toISOString());
+  if (!yes) { log("ok, nada copiado. Quando quiser: brito migrar-notas"); return; }
+  try {
+    const r = await migrateNotes(root, log);
+    log("none" in r ? r.none : `${r.added} nota(s) copiada(s) do grafo antigo.`);
+  } catch (e) {
+    fs.rmSync(markerOf(root), { force: true }); // falhou: pergunta de novo na próxima
+    log(`não consegui migrar as notas (${(e as Error).message.split("\n")[0]}). Tente: brito migrar-notas`);
+  }
+}
