@@ -24,7 +24,7 @@ export class GraphLockedError extends Error {
 
 const isLockError = (e: unknown) => /could not set lock/i.test(String((e as Error)?.message ?? e));
 /** Outro processo está criando o banco agora: o .shadow aparece antes do arquivo principal. Passa sozinho em instantes. */
-const isCreatingError = (e: unknown) => /shadow file|Cannot open file .*\.(shadow|wal)|checkpoint is in progress/i.test(String((e as Error)?.message ?? e));
+const isCreatingError = (e: unknown) => /shadow file|Cannot open file\b.*\.(shadow|wal)\b|checkpoint is in progress/i.test(String((e as Error)?.message ?? e));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** Quanto esperar o banco liberar antes de desistir: cobre sobreposições curtas (a reflexão de skills e o turno, por exemplo). */
 const LOCK_WAIT_MS = 15_000;
