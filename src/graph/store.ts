@@ -15,9 +15,8 @@ async function drain(r: any, read = true): Promise<Row[]> {
 export class GraphLockedError extends Error {
   constructor(file: string) {
     super(
-      `O grafo deste projeto está em uso por outro processo do Brito (${file}).\n` +
-      "O banco aceita um processo por vez: provavelmente há outro terminal com o Brito, ou uma sessão do Claude Code usando o Brito, neste mesmo diretório.\n" +
-      "Feche o outro, ou espere o turno em andamento terminar, e tente de novo.",
+      `Outro processo do Brito está gravando no grafo deste projeto (${file}) há mais tempo que o esperado.\n` +
+      "As sessões soltam o banco quando ficam ociosas; uma indexação longa em outro terminal pode segurá-lo. Espere ela terminar e tente de novo.",
     );
     this.name = "GraphLockedError";
   }
@@ -28,33 +27,70 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** Quanto esperar o banco liberar antes de desistir: cobre sobreposições curtas (a reflexão de skills e o turno, por exemplo). */
 const LOCK_WAIT_MS = 4000;
 
-export class GraphStore {
-  private db: kuzu.Database;
-  private conn: kuzu.Connection;
-  private queue: Promise<unknown> = Promise.resolve();
+/** Tempo ocioso até soltar o banco: o lock só existe enquanto há consultas em andamento. */
+const IDLE_MS = 300;
+/** Cypher que altera o banco precisa do modo escrita; o resto abre somente leitura (vários processos em paralelo). */
+const WRITE_RE = /\b(CREATE|MERGE|SET|DELETE|REMOVE|DROP|ALTER|COPY|LOAD|INSTALL|ATTACH|DETACH)\b/i;
 
-  private constructor(db: kuzu.Database, conn: kuzu.Connection) {
-    this.db = db;
-    this.conn = conn;
+export class GraphStore {
+  private db: kuzu.Database | null = null;
+  private conn: kuzu.Connection | null = null;
+  private mode: "r" | "w" | null = null;
+  private idle: NodeJS.Timeout | null = null;
+  private migrated = false;
+  private queue: Promise<unknown> = Promise.resolve();
+  private readonly file: string;
+  private readonly waitMs: number;
+
+  private constructor(file: string, waitMs: number) {
+    this.file = file;
+    this.waitMs = waitMs;
   }
 
   static async open(root: string, waitMs = LOCK_WAIT_MS): Promise<GraphStore> {
     const dir = path.join(root, ".brito");
     fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, "graph.kuzu");
-    const deadline = Date.now() + waitMs;
+    const store = new GraphStore(path.join(dir, "graph.kuzu"), waitMs);
+    await store.run("RETURN 1 AS ok", {}, true); // cria o banco e migra; solta o lock logo em seguida
+    return store;
+  }
+
+  /** Abre (ou promove) o banco no modo pedido, esperando o lock de outro processo. Roda dentro da fila. */
+  private async acquire(write: boolean) {
+    if (this.idle) { clearTimeout(this.idle); this.idle = null; }
+    if (this.db && (this.mode === "w" || !write)) return;
+    await this.release(); // leitura -> escrita: fecha antes de reabrir
+    const deadline = Date.now() + this.waitMs;
     for (;;) {
       try {
-        const db = new kuzu.Database(file);
-        const store = new GraphStore(db, new kuzu.Connection(db));
-        await store.migrate();
-        return store;
+        const ro = !write && fs.existsSync(this.file) && this.migrated;
+        const db = ro ? new kuzu.Database(this.file, 0, true, true) : new kuzu.Database(this.file);
+        this.db = db;
+        this.conn = new kuzu.Connection(db);
+        this.mode = ro ? "r" : "w";
+        if (!ro && !this.migrated) { await this.migrate(); this.migrated = true; }
+        return;
       } catch (e) {
+        await this.release();
         if (!isLockError(e)) throw e;
-        if (Date.now() >= deadline) throw new GraphLockedError(file);
-        await sleep(250);
+        if (Date.now() >= deadline) throw new GraphLockedError(this.file);
+        await sleep(100 + Math.random() * 150);
       }
     }
+  }
+
+  private async release() {
+    const { conn, db } = this;
+    this.conn = this.db = null;
+    this.mode = null;
+    try { await conn?.close(); } catch { /* já fechado */ }
+    try { await db?.close(); } catch { /* já fechado */ }
+  }
+
+  private touch() {
+    if (this.idle) clearTimeout(this.idle);
+    this.idle = setTimeout(() => { this.queue = this.queue.then(() => this.release()).catch(() => undefined); }, IDLE_MS);
+    this.idle.unref();
   }
 
   private async migrate() {
@@ -66,25 +102,30 @@ export class GraphStore {
       "CREATE REL TABLE IF NOT EXISTS CALLS(FROM Symbol TO Symbol)",
       "CREATE REL TABLE IF NOT EXISTS IMPORTS(FROM File TO File)",
     ];
-    for (const q of ddl) await drain(await this.conn.query(q), false);
+    for (const q of ddl) await drain(await this.conn!.query(q), false);
     // Bancos criados antes do indexador incremental não têm estas colunas.
-    for (const col of ["calls", "imports", "bindings"]) await drain(await this.conn.query(`ALTER TABLE File ADD IF NOT EXISTS ${col} STRING[] DEFAULT []`), false);
+    for (const col of ["calls", "imports", "bindings"]) await drain(await this.conn!.query(`ALTER TABLE File ADD IF NOT EXISTS ${col} STRING[] DEFAULT []`), false);
   }
 
   /** Serializa as queries: leituras paralelas de subagentes dividem uma única Connection. */
-  run(cypher: string, params: Record<string, any> = {}): Promise<Row[]> {
-    const next = this.queue.then(() => this.exec(cypher, params));
+  run(cypher: string, params: Record<string, any> = {}, forceWrite = false): Promise<Row[]> {
+    const next = this.queue.then(async () => {
+      await this.acquire(forceWrite || WRITE_RE.test(cypher));
+      try { return await this.exec(cypher, params); }
+      finally { this.touch(); }
+    });
     this.queue = next.catch(() => undefined);
     return next;
   }
 
   private async exec(cypher: string, params: Record<string, any>): Promise<Row[]> {
+    const conn = this.conn!;
     if (Object.keys(params).length === 0) {
-      return drain(await this.conn.query(cypher));
+      return drain(await conn.query(cypher));
     }
-    const ps = await this.conn.prepare(cypher);
+    const ps = await conn.prepare(cypher);
     if (!ps.isSuccess()) throw new Error(ps.getErrorMessage());
-    return drain(await this.conn.execute(ps, params));
+    return drain(await conn.execute(ps, params));
   }
 
   /** Apaga só o grafo de código; notas (memória) são preservadas. */
@@ -94,7 +135,8 @@ export class GraphStore {
   }
 
   async close() {
-    await this.conn.close();
-    await this.db.close();
+    await this.queue.catch(() => undefined);
+    if (this.idle) { clearTimeout(this.idle); this.idle = null; }
+    await this.release();
   }
 }

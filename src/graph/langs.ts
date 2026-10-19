@@ -352,7 +352,10 @@ export function extractLang(root: N, lang: ExtraLang, file: string): Extracted {
   const syms: Sym[] = [], calls: Call[] = [];
   const acc: Acc = { imports: [], bindings: [] };
   const mk = (name: string, kind: string, n: N): Sym => {
-    const s = { id: `${file}::${name}:${n.startPosition.row + 1}`, name, kind, file, startLine: n.startPosition.row + 1, endLine: n.endPosition.row + 1 };
+    const id = `${file}::${name}:${n.startPosition.row + 1}`;
+    const dup = syms.find((x) => x.id === id); // getter+setter (ou overloads) na mesma linha: id único
+    if (dup) { dup.endLine = Math.max(dup.endLine, n.endPosition.row + 1); return dup; }
+    const s = { id, name, kind, file, startLine: n.startPosition.row + 1, endLine: n.endPosition.row + 1 };
     syms.push(s);
     return s;
   };
