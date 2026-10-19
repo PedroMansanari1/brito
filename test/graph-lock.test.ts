@@ -57,24 +57,89 @@ test("GraphStore.open: se o outro processo soltar o banco dentro da espera, abre
   } finally { h.kill(); await h.exited; fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("GraphStore: dois processos no mesmo projeto convivem (o lock só dura enquanto há consulta)", { timeout: 60_000 }, async () => {
+test("GraphStore: quatro processos no mesmo projeto convivem (leitura e escrita misturadas, sem erro de lock/checkpoint) (o lock só dura enquanto há consulta)", { timeout: 60_000 }, async () => {
   const root = tmpRoot();
   const writer = (tag: string) => new Promise<number>((resolve) => {
     const code = `const { GraphStore } = await import("./src/graph/store.ts");
       const g = await GraphStore.open(${JSON.stringify(root)});
-      for (let i = 0; i < 15; i++) {
+      for (let i = 0; i < 20; i++) {
         await g.run("CREATE (:Note {id:$id, kind:'t', text:'x', refs:[], ts:1})", { id: "${tag}" + i });
         await g.run("MATCH (n:Note) RETURN count(n) AS n");
-        await new Promise((r) => setTimeout(r, 40));
+        await new Promise((r) => setTimeout(r, Math.random() * 300));
       }
       await g.close();`;
     spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], { cwd: REPO, stdio: "ignore" }).on("exit", (c) => resolve(c ?? 1));
   });
   try {
-    const codes = await Promise.all([writer("a"), writer("b")]);
-    assert.deepEqual(codes, [0, 0]);
+    const codes = await Promise.all([writer("a"), writer("b"), writer("c"), writer("d")]);
+    assert.deepEqual(codes, [0, 0, 0, 0]);
+    const g = await GraphStore.open(root);
+    assert.deepEqual(await g.run("MATCH (n:Note) RETURN count(n) AS n"), [{ n: 80 }]);
+    await g.close();
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("GraphStore: vários processos criando o banco do mesmo projeto novo ao mesmo tempo não falham", { timeout: 90_000 }, async () => {
+  const root = tmpRoot();
+  const child = (tag: string) => new Promise<number>((resolve) => {
+    const code = `const { GraphStore } = await import("./src/graph/store.ts");
+      const g = await GraphStore.open(${JSON.stringify(root)});
+      for (let i = 0; i < 5; i++) await g.run("CREATE (:Note {id:$id, kind:'t', text:'x', refs:[], ts:1})", { id: "${tag}" + i });
+      await g.close();`;
+    spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], { cwd: REPO, stdio: "ignore" }).on("exit", (c) => resolve(c ?? 1));
+  });
+  try {
+    const codes = await Promise.all(["a", "b", "c", "d", "e", "f"].map(child));
+    assert.deepEqual(codes, [0, 0, 0, 0, 0, 0]);
     const g = await GraphStore.open(root);
     assert.deepEqual(await g.run("MATCH (n:Note) RETURN count(n) AS n"), [{ n: 30 }]);
     await g.close();
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("indexProject: dois indexadores no mesmo projeto se enfileiram (o segundo acha tudo pronto, sem duplicar)", { timeout: 60_000 }, async () => {
+  const { indexProject } = await import("../src/graph/indexer.js");
+  const root = tmpRoot();
+  fs.mkdirSync(path.join(root, "src"));
+  for (let i = 0; i < 4; i++) fs.writeFileSync(path.join(root, "src", `f${i}.ts`), `export function a${i}() { return b${i}(); }\nexport function b${i}() { return ${i}; }\n`);
+  const g = await GraphStore.open(root);
+  try {
+    const [s1, s2] = await Promise.all([indexProject(root, g), indexProject(root, g)]);
+    assert.equal(s1.added + s2.added, 4); // cada arquivo entra uma vez só
+    assert.equal(Math.min(s1.added, s2.added), 0);
+    assert.deepEqual(await g.run("MATCH (f:File) RETURN count(f) AS n"), [{ n: 4 }]);
+    assert.equal(fs.existsSync(path.join(root, ".brito", "index.lock")), false, "solta o lock de indexação");
+  } finally { await g.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("indexProject: lock de indexação deixado por processo morto é ignorado", { timeout: 60_000 }, async () => {
+  const { indexProject } = await import("../src/graph/indexer.js");
+  const root = tmpRoot();
+  fs.mkdirSync(path.join(root, "src"));
+  fs.writeFileSync(path.join(root, "src", "a.ts"), "export const a = () => 1;\n");
+  fs.mkdirSync(path.join(root, ".brito"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".brito", "index.lock"), `999999 ${Date.now()}`); // pid inexistente
+  const g = await GraphStore.open(root);
+  try {
+    assert.equal((await indexProject(root, g)).added, 1);
+  } finally { await g.close(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("GraphStore.yieldIfWaited: quem espera o banco passa à frente de uma tarefa longa", { timeout: 60_000 }, async () => {
+  const root = tmpRoot();
+  const a = await GraphStore.open(root);
+  try {
+    await a.run("CREATE (:Note {id:'x', kind:'t', text:'x', refs:[], ts:1})"); // a segura o banco (escrita)
+    const code = `const { GraphStore } = await import("./src/graph/store.ts");
+      const g = await GraphStore.open(${JSON.stringify(root)});
+      console.log(JSON.stringify(await g.run("MATCH (n:Note) RETURN count(n) AS n"))); await g.close();`;
+    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], { cwd: REPO, stdio: ["ignore", "pipe", "ignore"] });
+    let out = ""; child.stdout.on("data", (d) => (out += d));
+    const done = new Promise<void>((r) => child.on("exit", () => r()));
+    const t0 = Date.now();
+    while (!out && Date.now() - t0 < 20_000) { await a.run("RETURN 1 AS x", {}, true); await a.yieldIfWaited(); } // "tarefa longa": segura o banco entre cada passo
+    await done;
+    assert.match(out, /"n":1/);
+    assert.ok(Date.now() - t0 < 15_000, "o outro processo não esperou o fim da tarefa");
+  } finally { await a.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });

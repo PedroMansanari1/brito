@@ -232,6 +232,36 @@ const count = async (store: GraphStore, q: string) => Number((await store.run(q)
  * como diff contra o banco.
  */
 export async function indexProject(root: string, store: GraphStore, opts: IndexOptions = {}): Promise<IndexStats> {
+  const release = await acquireIndexLock(root, opts.onProgress);
+  try { return await indexProjectLocked(root, store, opts); } finally { release(); }
+}
+
+/**
+ * Só um indexador por projeto de cada vez (o banco solta o lock entre consultas, então sem isto dois
+ * indexadores se intercalariam e criariam os mesmos arquivos). Quem chega depois espera e, ao entrar,
+ * encontra o trabalho feito: o diff incremental fica vazio.
+ */
+async function acquireIndexLock(root: string, onProgress?: (m: string) => void): Promise<() => void> {
+  const dir = path.join(root, ".brito");
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, "index.lock");
+  let warned = false;
+  for (;;) {
+    try {
+      fs.writeFileSync(file, `${process.pid} ${Date.now()}`, { flag: "wx" });
+      return () => { try { fs.rmSync(file, { force: true }); } catch { /* já removido */ } };
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      const [pid, ts] = (() => { try { return fs.readFileSync(file, "utf8").split(" ").map(Number); } catch { return [NaN, NaN]; } })();
+      const alive = (() => { try { process.kill(pid, 0); return true; } catch (err) { return (err as NodeJS.ErrnoException).code === "EPERM"; } })();
+      if (!alive || (Number.isFinite(ts) && Date.now() - ts > 30 * 60_000)) { fs.rmSync(file, { force: true }); continue; } // dono morreu ou travou
+      if (!warned) { onProgress?.("outro Brito está indexando este projeto; aguardando…"); warned = true; }
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
+}
+
+async function indexProjectLocked(root: string, store: GraphStore, opts: IndexOptions = {}): Promise<IndexStats> {
   const aliases = new Aliases(root);
   const current = await scan(root, aliases);
   if (opts.full) await store.clearCode();
@@ -293,6 +323,7 @@ export async function indexProject(root: string, store: GraphStore, opts: IndexO
       await store.run("MATCH (f:File {path:$f}), (s:Symbol {id:$id}) CREATE (f)-[:DEFINES]->(s)", { f: rel, id: s.id });
     }
     stored.set(rel, { hash, calls, imports: [...new Set(info.imports)], bindings });
+    await store.yieldIfWaited(); // dá a vez a outra sessão que só quer consultar
   }
 
   // 3. Recalcula arestas desejadas em memória (sem parsear) e aplica diff.

@@ -23,12 +23,16 @@ export class GraphLockedError extends Error {
 }
 
 const isLockError = (e: unknown) => /could not set lock/i.test(String((e as Error)?.message ?? e));
+/** Outro processo está criando o banco agora: o .shadow aparece antes do arquivo principal. Passa sozinho em instantes. */
+const isCreatingError = (e: unknown) => /shadow file|Cannot open file .*\.(shadow|wal)|checkpoint is in progress/i.test(String((e as Error)?.message ?? e));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** Quanto esperar o banco liberar antes de desistir: cobre sobreposições curtas (a reflexão de skills e o turno, por exemplo). */
-const LOCK_WAIT_MS = 4000;
+const LOCK_WAIT_MS = 15_000;
 
 /** Tempo ocioso até soltar o banco: o lock só existe enquanto há consultas em andamento. */
-const IDLE_MS = 300;
+const IDLE_MS = 150;
+/** Intervalo máximo entre tentativas de quem espera o banco. */
+const RETRY_MAX_MS = 250;
 /** Cypher que altera o banco precisa do modo escrita; o resto abre somente leitura (vários processos em paralelo). */
 const WRITE_RE = /\b(CREATE|MERGE|SET|DELETE|REMOVE|DROP|ALTER|COPY|LOAD|INSTALL|ATTACH|DETACH)\b/i;
 
@@ -73,15 +77,34 @@ export class GraphStore {
         this.db = db;
         this.conn = new kuzu.Connection(db);
         this.mode = ro ? "r" : "w";
+        this.clearWaiting();
         if (!ro && !this.migrated) { await this.migrate(); this.migrated = true; }
         return;
       } catch (e) {
         await this.release();
-        if (!isLockError(e)) throw e;
-        if (Date.now() >= deadline) throw new GraphLockedError(this.file);
-        await sleep(100 + Math.random() * 150);
+        const locked = isLockError(e);
+        if (!locked && !isCreatingError(e)) throw e;
+        if (Date.now() >= deadline) throw locked ? new GraphLockedError(this.file) : e;
+        this.signalWaiting();
+        await sleep(100 + Math.random() * (RETRY_MAX_MS - 100));
       }
     }
+  }
+
+  /** Sinal de que há processo esperando o banco: o arquivo é renovado a cada tentativa e vale poucos segundos. */
+  private get waitingFile() { return path.join(path.dirname(this.file), "graph.waiting"); }
+  private signalWaiting() { try { fs.writeFileSync(this.waitingFile, String(process.pid)); } catch { /* sem sinal: só perde a cortesia */ } }
+  private clearWaiting() { try { fs.rmSync(this.waitingFile, { force: true }); } catch { /* idem */ } }
+
+  /** Para tarefas longas (indexação): se outro processo está esperando o banco, solta e dá a vez a ele. Barato quando ninguém espera. */
+  async yieldIfWaited() {
+    let age = Infinity;
+    try { age = Date.now() - fs.statSync(this.waitingFile).mtimeMs; } catch { return; }
+    if (age > 2000) return;
+    await this.queue.catch(() => undefined);
+    if (this.idle) { clearTimeout(this.idle); this.idle = null; }
+    await this.release();
+    await sleep(RETRY_MAX_MS + 150); // mais que o intervalo de tentativa de quem espera: ele leva o banco
   }
 
   private async release() {
@@ -115,9 +138,22 @@ export class GraphStore {
   /** Serializa as queries: leituras paralelas de subagentes dividem uma única Connection. */
   run(cypher: string, params: Record<string, any> = {}, forceWrite = false): Promise<Row[]> {
     const next = this.queue.then(async () => {
-      await this.acquire(forceWrite || WRITE_RE.test(cypher));
-      try { return await this.exec(cypher, params); }
-      finally { this.touch(); }
+      const write = forceWrite || WRITE_RE.test(cypher);
+      const deadline = Date.now() + this.waitMs;
+      for (;;) {
+        await this.acquire(write);
+        try { return await this.exec(cypher, params); }
+        catch (e) {
+          // o binding abre o banco de forma preguiçosa: o lock/checkpoint de outro processo pode estourar só aqui, antes de executar a query
+          const locked = isLockError(e);
+          if (!locked && !isCreatingError(e)) throw e;
+          await this.release();
+          if (Date.now() >= deadline) throw locked ? new GraphLockedError(this.file) : e;
+          this.signalWaiting();
+        await sleep(100 + Math.random() * (RETRY_MAX_MS - 100));
+        }
+        finally { this.touch(); }
+      }
     });
     this.queue = next.catch(() => undefined);
     return next;
