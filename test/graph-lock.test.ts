@@ -28,6 +28,16 @@ function holder(root: string, holdMs: number) {
   return { ready, exited, kill: () => child.kill("SIGKILL") };
 }
 
+/** Roda um script ESM num processo filho e devolve código de saída + stderr (para o teste mostrar o motivo quando falhar). */
+function runChild(code: string) {
+  return new Promise<{ code: number; err: string }>((resolve) => {
+    const c = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], { cwd: REPO, stdio: ["ignore", "ignore", "pipe"] });
+    let err = ""; c.stderr.on("data", (d) => (err += d));
+    c.on("exit", (n) => resolve({ code: n ?? 1, err }));
+  });
+}
+const allOk = (rs: { code: number; err: string }[]) => assert.deepEqual(rs.map((r) => r.code), rs.map(() => 0), rs.map((r) => r.err).filter(Boolean).join("\n---\n").slice(0, 3000));
+
 const tmpRoot = () => fs.mkdtempSync(path.join(os.tmpdir(), "brito-lock-"));
 
 test("GraphStore.open: com o banco preso por outro processo, desiste com GraphLockedError claro (sem a stack do kuzu)", { timeout: 60_000 }, async () => {
@@ -59,7 +69,7 @@ test("GraphStore.open: se o outro processo soltar o banco dentro da espera, abre
 
 test("GraphStore: quatro processos no mesmo projeto convivem (leitura e escrita misturadas, sem erro de lock/checkpoint) (o lock só dura enquanto há consulta)", { timeout: 60_000 }, async () => {
   const root = tmpRoot();
-  const writer = (tag: string) => new Promise<number>((resolve) => {
+  const writer = (tag: string) => {
     const code = `const { GraphStore } = await import("./src/graph/store.ts");
       const g = await GraphStore.open(${JSON.stringify(root)});
       for (let i = 0; i < 20; i++) {
@@ -68,11 +78,10 @@ test("GraphStore: quatro processos no mesmo projeto convivem (leitura e escrita 
         await new Promise((r) => setTimeout(r, Math.random() * 300));
       }
       await g.close();`;
-    spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], { cwd: REPO, stdio: "ignore" }).on("exit", (c) => resolve(c ?? 1));
-  });
+    return runChild(code);
+  };
   try {
-    const codes = await Promise.all([writer("a"), writer("b"), writer("c"), writer("d")]);
-    assert.deepEqual(codes, [0, 0, 0, 0]);
+    allOk(await Promise.all([writer("a"), writer("b"), writer("c"), writer("d")]));
     const g = await GraphStore.open(root);
     assert.deepEqual(await g.run("MATCH (n:Note) RETURN count(n) AS n"), [{ n: 80 }]);
     await g.close();
@@ -81,16 +90,15 @@ test("GraphStore: quatro processos no mesmo projeto convivem (leitura e escrita 
 
 test("GraphStore: vários processos criando o banco do mesmo projeto novo ao mesmo tempo não falham", { timeout: 90_000 }, async () => {
   const root = tmpRoot();
-  const child = (tag: string) => new Promise<number>((resolve) => {
+  const child = (tag: string) => {
     const code = `const { GraphStore } = await import("./src/graph/store.ts");
       const g = await GraphStore.open(${JSON.stringify(root)});
       for (let i = 0; i < 5; i++) await g.run("CREATE (:Note {id:$id, kind:'t', text:'x', refs:[], ts:1})", { id: "${tag}" + i });
       await g.close();`;
-    spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", code], { cwd: REPO, stdio: "ignore" }).on("exit", (c) => resolve(c ?? 1));
-  });
+    return runChild(code);
+  };
   try {
-    const codes = await Promise.all(["a", "b", "c", "d", "e", "f"].map(child));
-    assert.deepEqual(codes, [0, 0, 0, 0, 0, 0]);
+    allOk(await Promise.all(["a", "b", "c", "d", "e", "f"].map(child)));
     const g = await GraphStore.open(root);
     assert.deepEqual(await g.run("MATCH (n:Note) RETURN count(n) AS n"), [{ n: 30 }]);
     await g.close();
