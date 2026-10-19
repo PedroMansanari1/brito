@@ -12,7 +12,7 @@ Brito is an agent for software development. Use it in the terminal (`brito-cli` 
 
 ## Highlights
 
-> **Upgrading to 0.6:** the graph engine changed from Kùzu (discontinued) to LadybugDB. The graph is rebuilt automatically on first use; your old `.brito/graph.kuzu` is kept. Brito asks once whether to copy your notes (memory) to the new graph, or run `brito migrar-notas` any time. Tests run in CI on macOS, Linux and Windows. See the [CHANGELOG](CHANGELOG.md).
+> **Upgrading to 0.6:** the graph engine changed from Kùzu (discontinued) to LadybugDB. The graph is rebuilt automatically on first use; your old `.brito/graph.kuzu` is kept. Brito asks once whether to copy your notes (memory) to the new graph, or run `brito migrar-notas` any time. Tests run in CI on macOS, Linux and Windows (use 0.6.1 or later on Windows/Linux). See the [CHANGELOG](CHANGELOG.md).
 
 - **Graph-first exploration.** `graph_search`, `graph_context`, `graph_callers`, `graph_callees` and `graph_impact` answer "where is it, who uses it, what breaks" without reading whole files. The graph is embedded ([LadybugDB](https://github.com/LadybugDB/ladybug), fork mantido do Kùzu), local and incremental.
 - **Wide coverage.** TypeScript/JavaScript, Python and the script blocks of `.svelte`, `.vue` and `.astro` components. Import aliases (`tsconfig` paths, `package.json` imports, SvelteKit's `$lib`) become real edges. Files ignored by `.gitignore` stay out.

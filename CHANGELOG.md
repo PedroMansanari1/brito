@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.1 — 2026-10-19
+
+Fixes concurrent use of the same project on **Windows and Linux** in 0.6.0. If you use several Brito sessions on one project on those systems, upgrade.
+
+### Fixed
+- With several processes on the same graph, a query could fail with an error about the `.shadow`/`.wal` file (`Cannot open file. path: …`, `Access is denied`, `Error removing directory or file`); the message differs between Windows and Linux, and 0.6.0 only recognised one form. Any `.shadow`/`.wal` error is now treated as transient and retried until the lock frees up (15 s).
+
+### CI
+- New `test` workflow runs typecheck and the test suite (including the multi-process lock tests) on macOS, Linux and Windows for every push and pull request. The desktop app was checked by hand on macOS only.
+
 ## 0.6.0 — 2026-10-19
 
 **Breaking change: the graph database engine changed from Kùzu to LadybugDB.** Kùzu was discontinued; [LadybugDB](https://github.com/LadybugDB/ladybug) is its maintained fork. The on-disk format is not compatible, so this is a minor bump (0.x: the middle number marks breaking changes).
@@ -9,7 +19,7 @@
 - Your old graph (`.brito/graph.kuzu`) is **kept untouched**. Delete it whenever you want to reclaim disk space.
 - **Notes (memory) are not lost.** On the first interactive open of a project that has an old graph, Brito asks once whether to copy the notes to the new graph (it downloads Kùzu, ~100 MB, only for that step, in a temp folder). Answer `n` and it will not ask again; you can copy them later with `brito migrar-notas` (idempotent, safe to repeat).
 - Skills are plain files and are not affected.
-- The `kuzu` dependency is gone; `@ladybugdb/core` replaces it (prebuilt binaries for macOS, Linux and Windows). The test suite (including multi-process lock/concurrency tests) runs in CI on macOS, Linux and Windows; the desktop app was checked by hand on macOS only.
+- The `kuzu` dependency is gone; `@ladybugdb/core` replaces it (prebuilt binaries for macOS, Linux and Windows). **Validated on macOS only**; Linux and Windows are expected to work but were not tested by hand.
 
 ### Added
 - `brito migrar-notas` copies the notes from the old Kùzu graph into the new one.
@@ -19,10 +29,7 @@
 
 ### Fixed
 - Multi-session robustness: concurrent creation of the database, lock starvation and two indexers running at once are handled (`.brito/index.lock`).
-- A query could fail with `Could not set lock`, `checkpoint is in progress` or an error about the `.shadow`/`.wal` file when another process was using the same graph, because the binding opens the database lazily and the error escaped the retry (and the message differs between Linux and Windows). Such errors are now retried until the lock frees up (15 s). Covered by a 4-process stress test.
-
-### CI
-- New `test` workflow runs typecheck and the test suite on macOS, Linux and Windows for every push and pull request.
+- A query could fail with `Could not set lock` or `checkpoint is in progress` when another process was using the same graph, because the binding opens the database lazily and the error escaped the retry. The query is now retried until the lock frees up. Covered by a 4-process stress test.
 
 ## 0.5.2 — 2026-10-17
 
