@@ -12,6 +12,8 @@ Brito is an agent for software development. Use it in the terminal (`brito-cli` 
 
 ## Highlights
 
+> **Upgrading to 0.6:** the graph engine changed from Kùzu (discontinued) to LadybugDB. The graph is rebuilt automatically on first use; your old `.brito/graph.kuzu` is kept. Brito asks once whether to copy your notes (memory) to the new graph, or run `brito migrar-notas` any time. Validated on macOS; Linux/Windows not tested by hand. See the [CHANGELOG](CHANGELOG.md).
+
 - **Graph-first exploration.** `graph_search`, `graph_context`, `graph_callers`, `graph_callees` and `graph_impact` answer "where is it, who uses it, what breaks" without reading whole files. The graph is embedded ([LadybugDB](https://github.com/LadybugDB/ladybug), fork mantido do Kùzu), local and incremental.
 - **Wide coverage.** TypeScript/JavaScript, Python and the script blocks of `.svelte`, `.vue` and `.astro` components. Import aliases (`tsconfig` paths, `package.json` imports, SvelteKit's `$lib`) become real edges. Files ignored by `.gitignore` stay out.
 - **Skills that learn on their own, on probation.** After a task that tripped or was corrected, Brito reflects and creates a skill *in trial* without interrupting you. A skill proves itself by use: 3 clean uses promote it, 2 stumbles archive it (recoverable). Anything risky, or any change to a skill you approved, still waits for your `/skills approve`. `BRITO_SKILLS=ask` restores approval-for-everything; `off` disables learning.

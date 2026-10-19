@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.6.0 — 2026-10-19
+
+**Breaking change: the graph database engine changed from Kùzu to LadybugDB.** Kùzu was discontinued; [LadybugDB](https://github.com/LadybugDB/ladybug) is its maintained fork. The on-disk format is not compatible, so this is a minor bump (0.x: the middle number marks breaking changes).
+
+### What you need to know when upgrading
+- The code graph is **rebuilt automatically** on first use (`.brito/graph.lbug`, new file). Expect a full re-index once; nothing to do.
+- Your old graph (`.brito/graph.kuzu`) is **kept untouched**. Delete it whenever you want to reclaim disk space.
+- **Notes (memory) are not lost.** On the first interactive open of a project that has an old graph, Brito asks once whether to copy the notes to the new graph (it downloads Kùzu, ~100 MB, only for that step, in a temp folder). Answer `n` and it will not ask again; you can copy them later with `brito migrar-notas` (idempotent, safe to repeat).
+- Skills are plain files and are not affected.
+- The `kuzu` dependency is gone; `@ladybugdb/core` replaces it (prebuilt binaries for macOS, Linux and Windows). **Validated on macOS only**; Linux and Windows are expected to work but were not tested by hand.
+
+### Added
+- `brito migrar-notas` copies the notes from the old Kùzu graph into the new one.
+
+### Changed
+- Graph store moved to LadybugDB (`src/graph/store.ts`). The database lock is held only while queries run, so several sessions can share a project.
+
+### Fixed
+- Multi-session robustness: concurrent creation of the database, lock starvation and two indexers running at once are handled (`.brito/index.lock`).
+- A query could fail with `Could not set lock` or `checkpoint is in progress` when another process was using the same graph, because the binding opens the database lazily and the error escaped the retry. The query is now retried until the lock frees up. Covered by a 4-process stress test.
+
+## 0.5.2 — 2026-10-17
+
+### Fixed
+- Dependencies: `commander` pinned to `^14` (requires Node >= 20) and `"latest"` replaced by version ranges.
+
+## 0.5.1 — 2026-10-16
+
+### Fixed
+- Unique id for getter/setter pairs in the graph; the graph releases its lock when idle.
+
 ## 0.5.0 — 2026-10-15
 
 Brito now comes in two forms: the `brito` command in the terminal (`brito-cli` on npm, as before) and a **desktop app**, a native executable for macOS, Windows and Linux.
