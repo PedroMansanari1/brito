@@ -27,6 +27,10 @@ O Brito é um agente para desenvolvimento de software. Use no terminal (`brito-c
 
 ## Como funciona
 
+![Indexação uma vez, depois respostas vindas do grafo em vez de grep e leitura de arquivos](docs/images/graph-vs-grep.svg)
+
+*O grafo é construído uma vez e atualizado de forma incremental; uma pergunta como "o que quebra se eu mudar isto?" vira uma ou duas chamadas ao grafo.*
+
 ```mermaid
 flowchart LR
     code["Seu projeto<br/>.ts · .js · .py · .java · .kt · .go · .rb · .php · .cs · .rs · .svelte · .vue · .astro"] -->|"tree-sitter<br/>incremental"| cg[("Grafo de código<br/>símbolos · chamadas · imports")]
@@ -43,7 +47,17 @@ flowchart LR
 - **Skills**: procedimentos passo a passo para o *seu* projeto (comandos, ordem, armadilhas, como verificar). O agente carrega uma com `skill_load` antes de uma tarefa que ela cobre.
 - **Journal**: o Brito lembra entre sessões quais tarefas se repetiram, o melhor indício de que um procedimento é geral e vale guardar.
 
+### Arquitetura em uma imagem
+
+![Arquitetura do Brito: contexto, permissões, ferramentas e subagentes ao redor do modelo](docs/images/architecture.svg)
+
+*Tudo o que o modelo vê ou pode fazer é um dos oito componentes, agrupados por papel. O texto em monoespaçado é o arquivo ou comando real; a etiqueta diz quando ele entra em ação.*
+
 ## Skills que merecem o lugar
+
+![Ciclo de vida da skill: tarefa, reflexão, teste ou pendente, ativa ou arquivada](docs/images/skill-lifecycle.svg)
+
+*Os dois caminhos de uma skill. As seguras se provam em teste; as arriscadas esperam a sua aprovação.*
 
 ![Revisando uma skill pendente, com aviso de comando destrutivo](docs/images/skills-review.png)
 

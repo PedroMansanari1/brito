@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 440" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif">
+  <title>Indexing once, answering from the graph</title>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#445"/></marker>
+    <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2c4f94"/></marker>
+  </defs>
+  <rect width="1200" height="440" fill="#fff"/>
+
+  <!-- (a) indexing -->
+  <rect x="16" y="16" width="1168" height="188" rx="18" fill="#e8edf7" stroke="#2c4f94" stroke-width="2"/>
+  <text x="36" y="48" font-size="20" fill="#2c4f94" font-weight="600">(a) Indexing: incremental, runs by itself after edits</text>
+
+  <rect x="40" y="70" width="230" height="110" rx="12" fill="#fff" stroke="#c4cde3"/>
+  <text x="155" y="100" text-anchor="middle" font-size="16" fill="#223" font-weight="600">Your project</text>
+  <text x="155" y="124" text-anchor="middle" font-size="12" fill="#445">.ts .py .java .go .rs ...</text>
+  <text x="155" y="142" text-anchor="middle" font-size="12" fill="#445">.svelte .vue .astro</text>
+  <text x="155" y="162" text-anchor="middle" font-size="11" fill="#667">files in .gitignore stay out</text>
+
+  <line x1="270" y1="125" x2="340" y2="125" stroke="#445" stroke-width="3" marker-end="url(#a)"/>
+  <text x="305" y="112" text-anchor="middle" font-size="11" fill="#445">if changed</text>
+
+  <rect x="344" y="70" width="230" height="110" rx="12" fill="#fff" stroke="#c4cde3"/>
+  <text x="459" y="100" text-anchor="middle" font-size="16" fill="#223" font-weight="600">tree-sitter</text>
+  <text x="459" y="124" text-anchor="middle" font-size="12" fill="#445">re-parses only changed files</text>
+  <text x="459" y="142" text-anchor="middle" font-size="12" fill="#445">resolves aliases (tsconfig,</text>
+  <text x="459" y="158" text-anchor="middle" font-size="12" fill="#445">package.json, $lib)</text>
+
+  <line x1="574" y1="125" x2="644" y2="125" stroke="#445" stroke-width="3" marker-end="url(#a)"/>
+
+  <rect x="648" y="70" width="250" height="110" rx="12" fill="#fff" stroke="#2c4f94" stroke-width="2"/>
+  <text x="773" y="100" text-anchor="middle" font-size="16" fill="#2c4f94" font-weight="600">Code graph (LadybugDB)</text>
+  <text x="773" y="124" text-anchor="middle" font-size="12" fill="#445">Symbol nodes: function, class,</text>
+  <text x="773" y="142" text-anchor="middle" font-size="12" fill="#445">method, component</text>
+  <text x="773" y="162" text-anchor="middle" font-size="12" fill="#445">edges: CALLS · IMPORTS · DEFINES</text>
+
+  <rect x="930" y="70" width="238" height="110" rx="12" fill="#fff" stroke="#c4cde3"/>
+  <text x="1049" y="100" text-anchor="middle" font-size="16" fill="#223" font-weight="600">.brito/graph</text>
+  <text x="1049" y="124" text-anchor="middle" font-size="12" fill="#445">local, embedded</text>
+  <text x="1049" y="142" text-anchor="middle" font-size="12" fill="#445">no server, no network</text>
+  <line x1="898" y1="125" x2="926" y2="125" stroke="#445" stroke-width="3" marker-end="url(#a)"/>
+
+  <!-- (b) question -->
+  <text x="36" y="246" font-size="20" fill="#223" font-weight="600">(b) One question: "what breaks if I change store.ts?"</text>
+
+  <rect x="16" y="262" width="572" height="162" rx="14" fill="#f7ebef" stroke="#a24f6c" stroke-width="2"/>
+  <text x="36" y="290" font-size="16" fill="#a24f6c" font-weight="600">Without a graph</text>
+  <g font-size="12" fill="#445">
+    <text x="36" y="316">grep "store" → dozens of hits, most unrelated</text>
+    <text x="36" y="336">read file 1 … read file N to confirm each caller</text>
+    <text x="36" y="356">follow imports by hand, one level at a time</text>
+    <text x="36" y="376">many tool calls · a lot of tokens · can miss a file</text>
+  </g>
+  <text x="36" y="408" font-size="13" fill="#a24f6c" font-weight="600">slow, expensive, incomplete</text>
+
+  <rect x="612" y="262" width="572" height="162" rx="14" fill="#e9f1ea" stroke="#3f7a4f" stroke-width="2"/>
+  <text x="632" y="290" font-size="16" fill="#3f7a4f" font-weight="600">With Brito</text>
+  <g font-size="12" fill="#445">
+    <text x="632" y="316" font-family="Menlo,Consolas,monospace">graph_impact(file, depth 3)</text>
+    <text x="632" y="336">→ every file that imports it, transitively, in ~0.1 s</text>
+    <text x="632" y="356" font-family="Menlo,Consolas,monospace">graph_callers(symbol)</text>
+    <text x="632" y="376">→ who calls it, with file and line</text>
+  </g>
+  <text x="632" y="408" font-size="13" fill="#3f7a4f" font-weight="600">1–2 calls, a few lines of output, then read only what matters</text>
+</svg>

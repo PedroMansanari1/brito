@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 480" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif">
+  <title>Brito architecture: components grouped by role</title>
+  <defs>
+    <marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2c4f94"/></marker>
+    <marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7a58b5"/></marker>
+    <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#3f7a4f"/></marker>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#a24f6c"/></marker>
+  </defs>
+  <rect width="1200" height="480" fill="#ffffff"/>
+
+  <!-- Context -->
+  <rect x="16" y="16" width="340" height="448" rx="18" fill="#e8edf7" stroke="#2c4f94" stroke-width="2"/>
+  <text x="36" y="48" font-size="22" fill="#2c4f94" font-weight="600">Context</text>
+  <text x="36" y="68" font-size="13" fill="#667">what enters the prompt, and when</text>
+  <g font-size="12">
+    <rect x="32" y="84" width="308" height="86" rx="10" fill="#fff" stroke="#c4cde3"/>
+    <rect x="44" y="96" width="30" height="20" rx="4" fill="#2c4f94"/><text x="59" y="110" fill="#fff" text-anchor="middle" font-weight="600">C1</text>
+    <text x="86" y="112" font-size="16" fill="#223">System prompt</text>
+    <text x="44" y="146" font-family="Menlo,Consolas,monospace" fill="#445">src/agent/prompt.ts</text>
+    <rect x="262" y="136" width="68" height="22" rx="11" fill="#e8edf7"/><text x="296" y="151" text-anchor="middle" fill="#2c4f94">every turn</text>
+
+    <rect x="32" y="180" width="308" height="86" rx="10" fill="#fff" stroke="#c4cde3"/>
+    <rect x="44" y="192" width="30" height="20" rx="4" fill="#2c4f94"/><text x="59" y="206" fill="#fff" text-anchor="middle" font-weight="600">C2</text>
+    <text x="86" y="208" font-size="16" fill="#223">Project rules</text>
+    <text x="44" y="242" font-family="Menlo,Consolas,monospace" fill="#445">BRITO.md · CLAUDE.md</text>
+    <rect x="262" y="232" width="68" height="22" rx="11" fill="#e8edf7"/><text x="296" y="247" text-anchor="middle" fill="#2c4f94">every turn</text>
+
+    <rect x="32" y="276" width="308" height="86" rx="10" fill="#fff" stroke="#c4cde3"/>
+    <rect x="44" y="288" width="30" height="20" rx="4" fill="#2c4f94"/><text x="59" y="302" fill="#fff" text-anchor="middle" font-weight="600">C3</text>
+    <text x="86" y="304" font-size="16" fill="#223">Memory notes</text>
+    <text x="44" y="338" font-family="Menlo,Consolas,monospace" fill="#445">recall / remember</text>
+    <rect x="252" y="328" width="78" height="22" rx="11" fill="#e8edf7"/><text x="291" y="343" text-anchor="middle" fill="#2c4f94">on demand</text>
+
+    <rect x="32" y="372" width="308" height="80" rx="10" fill="#fff" stroke="#c4cde3"/>
+    <rect x="44" y="384" width="30" height="20" rx="4" fill="#2c4f94"/><text x="59" y="398" fill="#fff" text-anchor="middle" font-weight="600">C4</text>
+    <text x="86" y="400" font-size="16" fill="#223">Skills</text>
+    <text x="44" y="434" font-family="Menlo,Consolas,monospace" fill="#445">.brito/skills/&lt;n&gt;/SKILL.md</text>
+    <rect x="248" y="424" width="82" height="22" rx="11" fill="#e8edf7"/><text x="289" y="439" text-anchor="middle" fill="#2c4f94">skill_load</text>
+  </g>
+
+  <!-- Model -->
+  <circle cx="470" cy="240" r="72" fill="#fff" stroke="#2c4f94" stroke-width="4"/>
+  <circle cx="470" cy="240" r="82" fill="none" stroke="#9db0d6" stroke-width="2"/>
+  <text x="470" y="232" text-anchor="middle" font-size="17" fill="#2c4f94">Model</text>
+  <text x="470" y="254" text-anchor="middle" font-size="11" fill="#667">API key or</text>
+  <text x="470" y="268" text-anchor="middle" font-size="11" fill="#667">claude CLI</text>
+  <line x1="356" y1="240" x2="384" y2="240" stroke="#2c4f94" stroke-width="3" marker-end="url(#ab)"/>
+
+  <!-- Permissions -->
+  <rect x="610" y="16" width="574" height="300" rx="18" fill="#f0eaf8" stroke="#7a58b5" stroke-width="2"/>
+  <text x="630" y="48" font-size="22" fill="#7a58b5" font-weight="600">Permissions</text>
+  <text x="630" y="68" font-size="13" fill="#667">gate on every tool call, outside the model's discretion</text>
+
+  <rect x="626" y="96" width="170" height="200" rx="10" fill="#fff" stroke="#d9cdee"/>
+  <rect x="638" y="108" width="30" height="20" rx="4" fill="#7a58b5"/><text x="653" y="122" font-size="12" fill="#fff" text-anchor="middle" font-weight="600">C5</text>
+  <text x="680" y="124" font-size="16" fill="#223">Gate</text>
+  <text x="638" y="158" font-size="12" fill="#445" font-family="Menlo,Consolas,monospace">src/permissions.ts</text>
+  <text x="638" y="186" font-size="12" fill="#445">manual</text>
+  <text x="638" y="206" font-size="12" fill="#445">auto-edits</text>
+  <text x="638" y="226" font-size="12" fill="#445">plan (read-only)</text>
+  <text x="638" y="246" font-size="12" fill="#445">everything allowed</text>
+  <text x="638" y="278" font-size="11" fill="#7a58b5">Shift+Tab cycles</text>
+
+  <!-- Tools -->
+  <rect x="826" y="84" width="344" height="220" rx="14" fill="#e9f1ea" stroke="#3f7a4f" stroke-width="2"/>
+  <text x="844" y="112" font-size="18" fill="#3f7a4f" font-weight="600">Tools</text>
+  <text x="844" y="130" font-size="12" fill="#667">what the model can call</text>
+  <g font-size="12">
+    <rect x="842" y="142" width="312" height="72" rx="8" fill="#fff" stroke="#cfe0d2"/>
+    <rect x="852" y="152" width="30" height="20" rx="4" fill="#3f7a4f"/><text x="867" y="166" fill="#fff" text-anchor="middle" font-weight="600">C6</text>
+    <text x="892" y="168" font-size="15" fill="#223">Graph tools</text>
+    <text x="852" y="196" font-family="Menlo,Consolas,monospace" fill="#445">src/tools/graph.ts</text>
+    <rect x="1054" y="184" width="90" height="22" rx="11" fill="#e9f1ea"/><text x="1099" y="199" text-anchor="middle" fill="#3f7a4f">graph_*</text>
+
+    <rect x="842" y="224" width="312" height="68" rx="8" fill="#fff" stroke="#cfe0d2"/>
+    <rect x="852" y="234" width="30" height="20" rx="4" fill="#3f7a4f"/><text x="867" y="248" fill="#fff" text-anchor="middle" font-weight="600">C7</text>
+    <text x="892" y="250" font-size="15" fill="#223">Files and shell</text>
+    <text x="852" y="278" font-family="Menlo,Consolas,monospace" fill="#445">fs.ts · bash.ts</text>
+    <rect x="1074" y="266" width="70" height="22" rx="11" fill="#e9f1ea"/><text x="1109" y="281" text-anchor="middle" fill="#3f7a4f">asks first</text>
+  </g>
+
+  <!-- Subagents -->
+  <rect x="610" y="336" width="574" height="128" rx="18" fill="#f7ebef" stroke="#a24f6c" stroke-width="2"/>
+  <text x="630" y="368" font-size="22" fill="#a24f6c" font-weight="600">Orchestration</text>
+  <text x="630" y="388" font-size="13" fill="#667">when work is delegated to an isolated agent</text>
+  <rect x="626" y="400" width="542" height="52" rx="10" fill="#fff" stroke="#e6c6d2"/>
+  <rect x="638" y="414" width="30" height="20" rx="4" fill="#a24f6c"/><text x="653" y="428" font-size="12" fill="#fff" text-anchor="middle" font-weight="600">C8</text>
+  <text x="680" y="430" font-size="16" fill="#223">Subagents</text>
+  <text x="790" y="430" font-size="12" fill="#445" font-family="Menlo,Consolas,monospace">explore · plan · general · .brito/agents/*.md</text>
+
+  <!-- Arrows -->
+  <line x1="552" y1="232" x2="624" y2="206" stroke="#7a58b5" stroke-width="3" marker-end="url(#ap)"/>
+  <text x="560" y="206" font-size="12" fill="#7a58b5">call</text>
+  <line x1="796" y1="200" x2="824" y2="200" stroke="#3f7a4f" stroke-width="3" marker-end="url(#ag)"/>
+  <line x1="624" y1="262" x2="546" y2="262" stroke="#3f7a4f" stroke-width="3" marker-end="url(#ag)"/>
+  <text x="572" y="282" font-size="12" fill="#3f7a4f">result</text>
+  <path d="M500,318 Q520,420 622,424" fill="none" stroke="#a24f6c" stroke-width="3" stroke-dasharray="7 5" marker-end="url(#ar)"/>
+</svg>

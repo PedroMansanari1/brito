@@ -27,6 +27,10 @@ Brito is an agent for software development. Use it in the terminal (`brito-cli` 
 
 ## How it works
 
+![Indexing once, then answering from the graph instead of grep and file reads](docs/images/graph-vs-grep.svg)
+
+*The graph is built once and updated incrementally; a question like "what breaks if I change this?" becomes one or two graph calls.*
+
 ```mermaid
 flowchart LR
     code["Your project<br/>.ts · .js · .py · .java · .kt · .go · .rb · .php · .cs · .rs · .svelte · .vue · .astro"] -->|"tree-sitter<br/>incremental"| cg[("Code graph<br/>symbols · calls · imports")]
@@ -47,7 +51,17 @@ flowchart LR
 - **Skills**: step-by-step procedures for *your* project (commands, order, traps, how to verify). The agent loads one with `skill_load` before a task it covers.
 - **Journal**: Brito remembers across sessions which tasks repeated, which is the best hint that a procedure is general and worth saving.
 
+### Architecture at a glance
+
+![Brito architecture: context, permissions, tools and subagents around the model](docs/images/architecture.svg)
+
+*Everything the model sees or can do is one of eight components, grouped by role. The mono-spaced text is the real file or command; the pill says when it fires.*
+
 ## Skills that earn their place
+
+![Skill lifecycle: task, reflection, trial or pending, active or archived](docs/images/skill-lifecycle.svg)
+
+*The two paths a skill can take. Safe ones prove themselves in trial; risky ones wait for your approval.*
 
 ![Reviewing a pending skill, with a destructive-command warning](docs/images/skills-review.png)
 
