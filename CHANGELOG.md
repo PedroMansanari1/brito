@@ -9,7 +9,7 @@
 - Your old graph (`.brito/graph.kuzu`) is **kept untouched**. Delete it whenever you want to reclaim disk space.
 - **Notes (memory) are not lost.** On the first interactive open of a project that has an old graph, Brito asks once whether to copy the notes to the new graph (it downloads Kùzu, ~100 MB, only for that step, in a temp folder). Answer `n` and it will not ask again; you can copy them later with `brito migrar-notas` (idempotent, safe to repeat).
 - Skills are plain files and are not affected.
-- The `kuzu` dependency is gone; `@ladybugdb/core` replaces it (prebuilt binaries for macOS, Linux and Windows). **Validated on macOS only**; Linux and Windows are expected to work but were not tested by hand.
+- The `kuzu` dependency is gone; `@ladybugdb/core` replaces it (prebuilt binaries for macOS, Linux and Windows). The test suite (including multi-process lock/concurrency tests) runs in CI on macOS, Linux and Windows; the desktop app was checked by hand on macOS only.
 
 ### Added
 - `brito migrar-notas` copies the notes from the old Kùzu graph into the new one.
@@ -19,7 +19,10 @@
 
 ### Fixed
 - Multi-session robustness: concurrent creation of the database, lock starvation and two indexers running at once are handled (`.brito/index.lock`).
-- A query could fail with `Could not set lock` or `checkpoint is in progress` when another process was using the same graph, because the binding opens the database lazily and the error escaped the retry. The query is now retried until the lock frees up. Covered by a 4-process stress test.
+- A query could fail with `Could not set lock`, `checkpoint is in progress` or an error about the `.shadow`/`.wal` file when another process was using the same graph, because the binding opens the database lazily and the error escaped the retry (and the message differs between Linux and Windows). Such errors are now retried until the lock frees up (15 s). Covered by a 4-process stress test.
+
+### CI
+- New `test` workflow runs typecheck and the test suite on macOS, Linux and Windows for every push and pull request.
 
 ## 0.5.2 — 2026-10-17
 
