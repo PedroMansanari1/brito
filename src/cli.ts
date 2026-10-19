@@ -59,6 +59,17 @@ program
   .action(async (o) => { const { serveDesktop } = await import("./desktop/serve.js"); await serveDesktop(rootOf(o), o.resume); });
 
 program
+  .command("migrar-notas")
+  .description("Copia as notas (memória) do grafo antigo do Kùzu para o novo grafo")
+  .option("-d, --dir <dir>", "raiz do projeto")
+  .action(async (o) => {
+    const { migrateNotes } = await import("./graph/migrate.js");
+    const r = await migrateNotes(rootOf(o), (m) => console.log(m));
+    if ("none" in r) console.log(r.none);
+    else console.log(`OK: ${r.found} nota(s) no banco antigo, ${r.added} copiada(s), ${r.skipped} já existiam. O .brito/graph.kuzu foi mantido; apague-o quando quiser.`);
+  });
+
+program
   .command("query <cypher>")
   .description("Executa Cypher no grafo")
   .option("-d, --dir <dir>")

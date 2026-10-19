@@ -53,7 +53,7 @@ export class GraphStore {
     // O Ladybug (fork mantido do Kùzu) não lê o formato antigo: usa arquivo novo e deixa o graph.kuzu intocado.
     const file = path.join(dir, "graph.lbug");
     if (!fs.existsSync(file) && fs.existsSync(path.join(dir, "graph.kuzu"))) {
-      process.stderr.write("brito: o grafo mudou de motor (Kùzu → Ladybug); o código será reindexado. O banco antigo (.brito/graph.kuzu) foi mantido; as notas dele não migram sozinhas.\n");
+      process.stderr.write("brito: o grafo mudou de motor (Kùzu → Ladybug); o código será reindexado. O banco antigo (.brito/graph.kuzu) foi mantido; para trazer as notas, rode `brito migrar-notas`.\n");
     }
     const store = new GraphStore(file, waitMs);
     await store.run("RETURN 1 AS ok", {}, true); // cria o banco e migra; solta o lock logo em seguida
