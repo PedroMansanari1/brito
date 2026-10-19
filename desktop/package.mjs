@@ -1,4 +1,4 @@
-// Empacota o app desktop para o SO atual (cada SO precisa ser empacotado nele mesmo: o kuzu é nativo).
+// Empacota o app desktop para o SO atual (cada SO precisa ser empacotado nele mesmo: o ladybug é nativo).
 //   macOS  → dist-app/Brito.app (+ Brito-<v>-macos-<arch>.dmg com --dmg; --install copia para /Applications)
 //   Linux  → dist-app/Brito-<v>-linux-<arch>.tar.gz (com install.sh: atalho no menu de aplicativos)
 //   Windows→ dist-app/Brito/ (o instalador .exe sai do Inno Setup: desktop/windows/brito.iss)
@@ -36,14 +36,11 @@ function copyApp(appDir) {
   // o bundle lê ../package.json (versão) relativo a dist/: este arquivo cumpre os dois papéis
   fs.writeFileSync(path.join(appDir, "package.json"), JSON.stringify({ name: "brito", version, main: "main.mjs", type: "module" }));
 
-  const mine = `${plat}-${arch}`;
   const keep = (src) => {
     const rel = path.relative(root, src).split(path.sep).join("/");
-    if (/\/kuzu-source(\/|$)/.test(rel)) return false; // fontes do kuzu: inúteis em runtime
-    const pre = rel.match(/node_modules\/kuzu\/prebuilt\/kuzujs-(.+)\.node$/);
-    return pre ? pre[1] === mine : true;
+    return !/node_modules\/@ladybugdb\/core\/node_modules(\/|$)/.test(rel); // cmake-js e afins: só de build, inúteis em runtime
   };
-  for (const m of ["kuzu", "web-tree-sitter", "tree-sitter-wasms", "node-addon-api"]) {
+  for (const m of ["@ladybugdb/core", "web-tree-sitter", "tree-sitter-wasms", "node-addon-api"]) {
     fs.cpSync(path.join(root, "node_modules", m), path.join(appDir, "node_modules", m), { recursive: true, filter: keep });
   }
   // cópia de arquivo "dataless" do iCloud pode sair vazia sem erro: confere o tamanho de cada arquivo

@@ -10,7 +10,7 @@ await build({
   platform: "node",
   format: "esm",
   target: "node20",
-  external: ["kuzu", "web-tree-sitter", "tree-sitter-wasms"],
+  external: ["@ladybugdb/core", "web-tree-sitter", "tree-sitter-wasms"],
   // dependências CJS embutidas em ESM precisam de `require`
   banner: { js: 'import { createRequire as __cr } from "node:module"; const require = __cr(import.meta.url);' },
   logLevel: "info",

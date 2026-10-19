@@ -1,6 +1,6 @@
 {
   "name": "brito-cli",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "Coding-agent CLI with a code knowledge graph, memory and reviewable skills / CLI de agente de código com grafo de conhecimento, memória e skills revisáveis",
   "type": "module",
   "bin": {
@@ -21,9 +21,9 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.131.0",
+    "@ladybugdb/core": "0.21.2",
     "@modelcontextprotocol/sdk": "^1.32.0",
     "commander": "^14.0.3",
-    "kuzu": "^0.11.3",
     "string-width": "^8.3.0",
     "tinyglobby": "^0.2.17",
     "tree-sitter-wasms": "^0.1.13",

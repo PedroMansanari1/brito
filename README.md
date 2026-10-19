@@ -12,7 +12,7 @@ Brito is an agent for software development. Use it in the terminal (`brito-cli` 
 
 ## Highlights
 
-- **Graph-first exploration.** `graph_search`, `graph_context`, `graph_callers`, `graph_callees` and `graph_impact` answer "where is it, who uses it, what breaks" without reading whole files. The graph is embedded ([Kùzu](https://kuzudb.com)), local and incremental.
+- **Graph-first exploration.** `graph_search`, `graph_context`, `graph_callers`, `graph_callees` and `graph_impact` answer "where is it, who uses it, what breaks" without reading whole files. The graph is embedded ([LadybugDB](https://github.com/LadybugDB/ladybug), fork mantido do Kùzu), local and incremental.
 - **Wide coverage.** TypeScript/JavaScript, Python and the script blocks of `.svelte`, `.vue` and `.astro` components. Import aliases (`tsconfig` paths, `package.json` imports, SvelteKit's `$lib`) become real edges. Files ignored by `.gitignore` stay out.
 - **Skills that learn on their own, on probation.** After a task that tripped or was corrected, Brito reflects and creates a skill *in trial* without interrupting you. A skill proves itself by use: 3 clean uses promote it, 2 stumbles archive it (recoverable). Anything risky, or any change to a skill you approved, still waits for your `/skills approve`. `BRITO_SKILLS=ask` restores approval-for-everything; `off` disables learning.
 - **Safety rails for what gets learned.** A lint rejects secrets, credentials embedded in URLs, `curl | sh` and prompt-injection phrasing, and **warns about destructive commands** (see below).
@@ -187,7 +187,7 @@ npm test             # 190+ tests, including a real MCP server and a real REPL
 
 | Path | What |
 |---|---|
-| `src/graph/` | indexer (tree-sitter), `.svelte/.vue/.astro` support, import aliases, Kùzu store |
+| `src/graph/` | indexer (tree-sitter), `.svelte/.vue/.astro` support, import aliases, Ladybug (Kùzu) store |
 | `src/skills/` | store, lint, reflection, journal, consolidation |
 | `src/agent/` | agent loop, prompts, subagents, `claude` CLI backend |
 | `src/tools/` | graph, memory, skills, filesystem and shell tools |

@@ -1,6 +1,7 @@
 node_modules
 dist
 .brito/graph.kuzu*
+.brito/graph.lbug*
 .DS_Store
 .env
 *.log

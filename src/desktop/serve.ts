@@ -118,7 +118,7 @@ export async function serveDesktop(root: string, resumeId?: string): Promise<voi
   } else {
     const approval = startApprovalServer({ ask });
     closeApproval = approval.close;
-    // O kuzu aceita um único processo com escrita: indexa, lê as stats e solta o banco para o servidor MCP.
+    // O banco aceita um único processo com escrita: indexa, lê as stats e solta o banco para o servidor MCP.
     if (!isHome) try {
       const graph = await GraphStore.open(root);
       emit({ t: "info", msg: "sincronizando grafo…" });

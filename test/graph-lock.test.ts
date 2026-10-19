@@ -11,10 +11,10 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Processo externo segurando o lock de escrita do Kùzu. O filho abre o banco, avisa READY e solta depois de holdMs. */
 function holder(root: string, holdMs: number) {
-  const code = `const kuzu = (await import("kuzu")).default;
+  const code = `const kuzu = (await import("@ladybugdb/core")).default;
     const fs = await import("node:fs"); const path = await import("node:path");
     fs.mkdirSync(path.join(${JSON.stringify(root)}, ".brito"), { recursive: true });
-    const db = new kuzu.Database(path.join(${JSON.stringify(root)}, ".brito", "graph.kuzu"));
+    const db = new kuzu.Database(path.join(${JSON.stringify(root)}, ".brito", "graph.lbug"));
     const conn = new kuzu.Connection(db);
     await (await conn.query("CREATE NODE TABLE IF NOT EXISTS T(id STRING, PRIMARY KEY(id))")).close();
     console.log("READY");

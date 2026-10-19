@@ -300,7 +300,7 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean) {
   // O REPL troca `io.ask`; em prompt único cai na pergunta simples.
   const io = { ask: async (q: string, _opts?: { force?: boolean }): Promise<boolean> => perms.mode === "bypass" || plainAsk(q) };
   const approval = startApprovalServer({ ask: (q, opts) => io.ask(q, opts) });
-  // O kuzu aceita um único processo com acesso de escrita: indexa, lê as stats e solta o banco para o servidor MCP.
+  // O banco aceita um único processo com acesso de escrita: indexa, lê as stats e solta o banco para o servidor MCP.
   const graph = await GraphStore.open(root);
   ui.info("sincronizando grafo…");
   await indexProject(root, graph);

@@ -12,7 +12,7 @@ O Brito é um agente para desenvolvimento de software. Use no terminal (`brito-c
 
 ## Destaques
 
-- **Exploração guiada pelo grafo.** `graph_search`, `graph_context`, `graph_callers`, `graph_callees` e `graph_impact` respondem "onde está, quem usa, o que quebra" sem ler arquivos inteiros. O grafo é embutido ([Kùzu](https://kuzudb.com)), local e incremental.
+- **Exploração guiada pelo grafo.** `graph_search`, `graph_context`, `graph_callers`, `graph_callees` e `graph_impact` respondem "onde está, quem usa, o que quebra" sem ler arquivos inteiros. O grafo é embutido ([LadybugDB](https://github.com/LadybugDB/ladybug), fork mantido do Kùzu), local e incremental.
 - **Cobertura ampla.** TypeScript/JavaScript, Python e os blocos de script de componentes `.svelte`, `.vue` e `.astro`. Aliases de import (`paths` do tsconfig, `imports` do package.json, `$lib` do SvelteKit) viram arestas de verdade. O que o `.gitignore` ignora fica de fora.
 - **Skills que aprendem sozinhas, em período de teste.** Depois de uma tarefa em que algo tropeçou ou foi corrigido, o Brito reflete e cria uma skill *em teste* sem te interromper. A skill se prova pelo uso: 3 usos limpos a promovem, 2 tropeços a arquivam (recuperável). O que é arriscado, ou qualquer mudança numa skill que você aprovou, continua esperando o seu `/skills approve`. `BRITO_SKILLS=ask` volta a pedir aprovação para tudo; `off` desliga o aprendizado.
 - **Proteções sobre o que é aprendido.** Um lint rejeita segredos, credenciais embutidas em URL, `curl | sh` e frases de injeção de prompt, e **avisa sobre comandos destrutivos** (veja abaixo).
@@ -183,7 +183,7 @@ npm test             # 190+ testes, incluindo um servidor MCP real e um REPL rea
 
 | Caminho | O quê |
 |---|---|
-| `src/graph/` | indexador (tree-sitter), suporte a `.svelte/.vue/.astro`, aliases de import, store Kùzu |
+| `src/graph/` | indexador (tree-sitter), suporte a `.svelte/.vue/.astro`, aliases de import, store Ladybug (Kùzu) |
 | `src/skills/` | store, lint, reflexão, journal, consolidação |
 | `src/agent/` | loop do agente, prompts, subagentes, backend da CLI `claude` |
 | `src/tools/` | tools de grafo, memória, skills, arquivos e shell |
