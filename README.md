@@ -192,7 +192,8 @@ Besides Claude, Brito runs on any model served through the OpenAI **Chat Complet
       "model": "<model id; on OCI, the dedicated endpoint OCID>",
       "apiKeyEnv": "BRITO_QWEN_API_KEY",
       "contextWindow": 262144,
-      "vision": false
+      "vision": false,
+      "thinkingToggle": true
     }
   }
 }
@@ -205,7 +206,7 @@ brito --model qwen            # this session
 /model qwen --global          # inside the REPL: make it the default
 ```
 
-With a profile selected, **everything** goes to the endpoint: main agent, subagents (`explore` stops using Haiku), context summaries and skill learning; Brito starts without `ANTHROPIC_API_KEY` and without the `claude` CLI. `/reasoning none` turns the model's reasoning off (much faster answers on Qwen). Images are only sent with `"vision": true`. `/effort` stays exclusive to `claude` CLI mode, and a profile does not run inside the `claude` CLI (`/model` tells you to reopen with `--model`).
+With a profile selected, **everything** goes to the endpoint: main agent, subagents (`explore` stops using Haiku), context summaries and skill learning; Brito starts without `ANTHROPIC_API_KEY` and without the `claude` CLI. `/reasoning none` turns the model's reasoning off (much faster answers on Qwen). `thinkingToggle: true` only for servers that accept `chat_template_kwargs` (vLLM/Qwen); without it `/reasoning none` has no effect, but no unknown parameter is sent. Images are only sent with `"vision": true`. Deliberate exception: `BRITO_EXPLORE_MODEL` still decides the `explore` subagent; a `BRITO_LEARN_MODEL` pointing at Claude is ignored while a profile is active. A broken profile in the config never falls back to Claude: Brito warns and stops. `/effort` stays exclusive to `claude` CLI mode, and a profile does not run inside the `claude` CLI (`/model` tells you to reopen with `--model`).
 
 ## Configuration
 

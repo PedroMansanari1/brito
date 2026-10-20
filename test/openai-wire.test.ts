@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { buildChatBody, fromChatCompletion, mapFinish, parseToolArgs, toChatMessages, toChatTools } from "../src/provider/openai-wire.js";
 import type { OpenAIProfile } from "../src/provider/types.js";
 
-const PERFIL: OpenAIProfile = { name: "qwen", type: "openai", label: "Qwen", baseURL: "https://endpoint.invalido/openai/v1", model: "endpoint-ocid-de-teste", apiKeyEnv: "BRITO_TESTE_KEY", contextWindow: 262144, vision: false };
+const PERFIL: OpenAIProfile = { name: "qwen", type: "openai", label: "Qwen", baseURL: "https://endpoint.invalido/openai/v1", model: "endpoint-ocid-de-teste", apiKeyEnv: "BRITO_TESTE_KEY", contextWindow: 262144, vision: false, thinkingToggle: false };
 
 test("system e texto", () => {
   assert.deepEqual(toChatMessages("SYS", [{ role: "user", content: "oi" }], false).messages, [{ role: "system", content: "SYS" }, { role: "user", content: "oi" }]);
@@ -51,11 +51,13 @@ test("corpo da requisição", () => {
   assert.equal(body.max_tokens, 8192);
   assert.equal(body.stream, true);
   assert.deepEqual(body.stream_options, { include_usage: true });
-  assert.deepEqual(body.chat_template_kwargs, { enable_thinking: false });
+  assert.equal("chat_template_kwargs" in body, false); // perfil sem thinkingToggle: nada específico do vLLM
   assert.equal((body.tools as unknown[]).length, 1);
   const semTools = buildChatBody({ model: "qwen", system: "S", messages: [], tools: [], maxTokens: 10 }, PERFIL, false);
   assert.equal("tools" in semTools, false);
-  assert.deepEqual(semTools.chat_template_kwargs, { enable_thinking: true });
+  const comToggle = { ...PERFIL, thinkingToggle: true };
+  assert.deepEqual(buildChatBody({ model: "qwen", system: "S", messages: [], maxTokens: 10, thinking: false }, comToggle, false).chat_template_kwargs, { enable_thinking: false });
+  assert.deepEqual(buildChatBody({ model: "qwen", system: "S", messages: [], maxTokens: 10 }, comToggle, false).chat_template_kwargs, { enable_thinking: true });
   assert.equal("stream_options" in semTools, false);
 });
 

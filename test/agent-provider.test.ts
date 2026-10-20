@@ -107,3 +107,49 @@ test("Ctrl+C repara o histórico como antes", async () => {
   assert.equal(last.role, "user");
   sb.cleanup();
 });
+
+/** Config temporário com o perfil qwen (raciocínio controlável), para os testes que dependem dele. */
+function perfilQwen(dir: string) {
+  process.env.BRITO_CONFIG = path.join(dir, "c.json");
+  fs.writeFileSync(process.env.BRITO_CONFIG, JSON.stringify({ providers: { qwen: { type: "openai", label: "Qwen", baseURL: "https://endpoint.invalido/v1", model: "m", apiKeyEnv: "BRITO_TESTE_KEY", thinkingToggle: true } } }));
+}
+
+test("resposta cortada sem conteúdo avisa e não suja o histórico", async () => {
+  const sb = sandbox();
+  fakeProvider([{ content: [], stopReason: "max_tokens", usage: usage(10) }]);
+  const log: string[] = [];
+  const agent = new Agent("SYS", sb.ctx, { model: "qwen", sink: silentSink(log), log: (m) => log.push(m) });
+  assert.equal(await agent.send("x"), "");
+  assert.equal(agent.messages.length, 1);
+  assert.ok(log.some((l) => /cortada/.test(l)), log.join(" | "));
+  sb.cleanup();
+});
+
+test("tool call cortada ganha tool_result de erro e o histórico fica válido", async () => {
+  const sb = sandbox();
+  fakeProvider([{ content: [{ type: "tool_use", id: "t9", name: "glob", input: { _argumentosInvalidos: '{"pat' } }], stopReason: "max_tokens", usage: usage(10) }]);
+  const log: string[] = [];
+  const agent = new Agent("SYS", sb.ctx, { model: "qwen", sink: silentSink(log), log: (m) => log.push(m) });
+  await agent.send("x");
+  const last = agent.messages[agent.messages.length - 1] as any;
+  assert.equal(last.role, "user");
+  assert.equal(last.content[0].type, "tool_result");
+  assert.equal(last.content[0].tool_use_id, "t9");
+  assert.equal(last.content[0].is_error, true);
+  assert.ok(log.some((l) => /cortada/.test(l)));
+  sb.cleanup();
+});
+
+test("perfil com raciocínio ligado ganha orçamento maior de tokens", async () => {
+  const sb = sandbox();
+  perfilQwen(sb.home);
+  const reqs = fakeProvider([text("a"), text("b"), text("c")]);
+  const agent = new Agent("SYS", sb.ctx, { model: "qwen", sink: silentSink() });
+  await agent.send("1");
+  agent.effort = "none";
+  await agent.send("2");
+  agent.model = "sonnet";
+  await agent.send("3");
+  assert.deepEqual(reqs.map((r) => r.maxTokens), [16384, 8192, 8192]);
+  sb.cleanup();
+});

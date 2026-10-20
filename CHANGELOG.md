@@ -11,6 +11,10 @@
 ### Changed
 - Model calls go through a provider layer (`src/provider/`); Claude behaviour is unchanged.
 - Learning, consolidation and the `plan`/`general` subagents follow the live model (`/model`) instead of the model read at startup.
+- A response cut by the token limit now warns and keeps the history valid (no empty assistant message; a cut tool call gets an error `tool_result`). Endpoint profiles with reasoning on get a 16k output budget.
+
+### Fixed
+- `-m/--model` now applies to single-prompt runs in `claude` CLI mode too.
 
 ## 0.6.1 — 2026-10-19
 

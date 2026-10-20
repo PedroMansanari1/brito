@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pickEngine, subagentModel } from "../src/engine.js";
+import { learnerModel, pickEngine, subagentModel } from "../src/engine.js";
 
 before(() => {
   process.env.BRITO_CONFIG = join(mkdtempSync(join(tmpdir(), "brito-")), "c.json");
-  writeFileSync(process.env.BRITO_CONFIG, JSON.stringify({ providers: { qwen: { type: "openai", baseURL: "https://endpoint.invalido/v1", model: "m", apiKeyEnv: "BRITO_TESTE_KEY" } } }));
+  writeFileSync(process.env.BRITO_CONFIG, JSON.stringify({ providers: { qwen: { type: "openai", baseURL: "https://endpoint.invalido/v1", model: "m", apiKeyEnv: "BRITO_TESTE_KEY" }, ruim: { type: "openai", baseURL: "https://endpoint.invalido/v1", model: "m", apiKeyENV: "X" } } }));
 });
 
 const nuncaChamar = () => { throw new Error("não devia consultar o claude CLI"); };
@@ -39,4 +39,17 @@ test("subagentes ficam no provedor do agente principal", () => {
   assert.equal(subagentModel({ name: "explore" }, "sonnet", {}), "claude-haiku-4-5-20251001");
   assert.equal(subagentModel({ name: "plan" }, "sonnet", {}), "sonnet");
   assert.equal(subagentModel({ name: "x", model: "qwen" }, "sonnet", {}), "qwen");
+});
+
+test("perfil escolhido mas inválido não cai no Claude", () => {
+  const e = pickEngine("ruim", { ANTHROPIC_API_KEY: "x" }, () => true);
+  assert.equal(e.kind, "error");
+  assert.match((e as { message: string }).message, /ruim/);
+});
+
+test("BRITO_LEARN_MODEL não leva o aprendizado à Anthropic com perfil ativo", () => {
+  assert.equal(learnerModel("qwen", { BRITO_LEARN_MODEL: "haiku" }), "qwen");
+  assert.equal(learnerModel("sonnet", { BRITO_LEARN_MODEL: "haiku" }), "haiku");
+  assert.equal(learnerModel("qwen", {}), "qwen");
+  assert.equal(learnerModel("sonnet", {}), "sonnet");
 });

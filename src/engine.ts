@@ -1,4 +1,4 @@
-import { MODEL_ALIASES } from "./model.js";
+import { MODEL_ALIASES, loadProfiles } from "./model.js";
 import { missingKeyMessage } from "./provider/openai-compat.js";
 import { resolveModel } from "./provider/resolve.js";
 
@@ -13,6 +13,11 @@ export const EXPLORE_DEFAULT = MODEL_ALIASES.haiku;
  */
 export function pickEngine(model: string, env: NodeJS.ProcessEnv, hasCli: () => boolean): Engine {
   const r = resolveModel(model);
+  const name = model.trim().toLowerCase();
+  if (r.kind === "anthropic" && loadProfiles().rejected.includes(name)) {
+    const why = loadProfiles().errors.find((e) => e.toLowerCase().includes(`"${name}"`)) ?? "";
+    return { kind: "error", message: `o perfil "${name}" em ~/.brito/config.json está inválido (${why}); corrija antes de usar` };
+  }
   if (r.kind === "openai") return env[r.profile!.apiKeyEnv]?.trim() ? { kind: "api" } : { kind: "error", message: missingKeyMessage(r.profile!) };
   if (env.ANTHROPIC_API_KEY) return { kind: "api" };
   if (hasCli()) return { kind: "claude" };
@@ -28,4 +33,11 @@ export function subagentModel(def: { name: string; model?: string }, parent: str
   const wanted = def.model ?? (def.name === "explore" ? EXPLORE_DEFAULT : undefined);
   if (resolveModel(parent).kind === "openai" && (!wanted || resolveModel(wanted).kind === "anthropic")) return parent;
   return wanted ?? parent;
+}
+
+/** Modelo da reflexão/consolidação de skills: BRITO_LEARN_MODEL, salvo se ele levaria a conta à Anthropic com um perfil ativo. */
+export function learnerModel(live: string, env: NodeJS.ProcessEnv): string {
+  const wanted = env.BRITO_LEARN_MODEL;
+  if (!wanted) return live;
+  return resolveModel(live).kind === "openai" && resolveModel(wanted).kind === "anthropic" ? live : wanted;
 }

@@ -188,7 +188,8 @@ Além do Claude, o Brito roda com qualquer modelo servido pela API **Chat Comple
       "model": "<id do modelo; no OCI, o OCID do endpoint dedicado>",
       "apiKeyEnv": "BRITO_QWEN_API_KEY",
       "contextWindow": 262144,
-      "vision": false
+      "vision": false,
+      "thinkingToggle": true
     }
   }
 }
@@ -201,7 +202,7 @@ brito --model qwen            # esta sessão
 /model qwen --global          # dentro do REPL: vira o padrão
 ```
 
-Com um perfil escolhido, **tudo** vai para o endpoint: agente principal, subagentes (o `explore` deixa de usar o Haiku), resumo de contexto e aprendizado de skills; o Brito abre sem `ANTHROPIC_API_KEY` e sem o `claude` CLI. `/reasoning none` desliga o raciocínio do modelo (respostas bem mais rápidas no Qwen). Imagens só são enviadas com `"vision": true`. `/effort` continua exclusivo do modo `claude` CLI, e um perfil não roda dentro do `claude` CLI (o `/model` avisa para reabrir com `--model`).
+Com um perfil escolhido, **tudo** vai para o endpoint: agente principal, subagentes (o `explore` deixa de usar o Haiku), resumo de contexto e aprendizado de skills; o Brito abre sem `ANTHROPIC_API_KEY` e sem o `claude` CLI. `/reasoning none` desliga o raciocínio do modelo (respostas bem mais rápidas no Qwen). `thinkingToggle: true` só para servidores que aceitam `chat_template_kwargs` (vLLM/Qwen); sem ele o `/reasoning none` não tem efeito, mas nenhum parâmetro estranho é enviado. Imagens só são enviadas com `"vision": true`. Exceção consciente: `BRITO_EXPLORE_MODEL` continua mandando no subagente `explore`; já um `BRITO_LEARN_MODEL` que aponte para um Claude é ignorado enquanto um perfil estiver ativo. Perfil com erro no config não cai no Claude: o Brito avisa e para. `/effort` continua exclusivo do modo `claude` CLI, e um perfil não roda dentro do `claude` CLI (o `/model` avisa para reabrir com `--model`).
 
 ## Configuração
 

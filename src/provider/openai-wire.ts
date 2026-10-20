@@ -54,9 +54,10 @@ export function buildChatBody(req: ModelRequest, p: OpenAIProfile, stream: boole
     messages: toChatMessages(req.system, req.messages, p.vision).messages,
     max_tokens: req.maxTokens,
     stream,
-    // Qwen/vLLM: liga/desliga o raciocínio pelo template do chat.
-    chat_template_kwargs: { enable_thinking: req.thinking !== false },
   };
+  // Qwen/vLLM: liga/desliga o raciocínio pelo template do chat. Só com `thinkingToggle`: a OpenAI e outros servidores
+  // recusam parâmetro desconhecido.
+  if (p.thinkingToggle) body.chat_template_kwargs = { enable_thinking: req.thinking !== false };
   if (stream) body.stream_options = { include_usage: true };
   if (req.tools?.length) body.tools = toChatTools(req.tools);
   return body;

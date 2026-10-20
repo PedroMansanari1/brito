@@ -53,6 +53,8 @@ export interface OpenAIProfile {
   contextWindow: number;
   /** o modelo aceita imagens? sem isso, imagens anexadas não são enviadas */
   vision: boolean;
+  /** o servidor aceita `chat_template_kwargs.enable_thinking` (vLLM/Qwen)? sem isso o parâmetro não é enviado */
+  thinkingToggle: boolean;
 }
 
 export interface ResolvedModel {

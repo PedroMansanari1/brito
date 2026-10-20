@@ -17,7 +17,7 @@ import { indexProject } from "./graph/indexer.js";
 import { Agent } from "./agent/loop.js";
 import { EFFORTS, MODEL_ALIASES, modelHelp, effortLabel, initialEffort, initialModel, loadProfiles, isEffort, loadReasoningDisplay, parseModelArgs, saveEffort, saveModel, saveReasoningDisplay, type Effort, type ModelScope } from "./model.js";
 import { hasClaudeCli, ClaudeSession } from "./agent/claude-cli.js";
-import { pickEngine } from "./engine.js";
+import { learnerModel, pickEngine } from "./engine.js";
 import { compactAtFor, contextWindowFor, resolveModel } from "./provider/resolve.js";
 import { startApprovalServer } from "./agent/approval.js";
 import { serveMcp } from "./mcp/server.js";
@@ -349,13 +349,13 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean, m
   const learnCtx: ToolContext = { root, graph: undefined as unknown as GraphStore, ask: (q, opts) => io.ask(q, opts), sync: async () => {}, dirty: false, loadedSkills: session.loadedSkills };
   const learn = makeLearner(() => session.recentTurns, learnCtx, claudeCliComplete, () => process.env.BRITO_LEARN_MODEL ?? ""); // "" = modelo padrão do claude
 
+  if (model) { session.requestedModel = resolveModel(model).wireModel; session.model = session.requestedModel; }
   if (promptParts.length) {
     const ok = await session.send(promptParts.join(" "));
     if (ok) await learn(); else process.exitCode = 1;
     return;
   }
 
-  if (model) { session.requestedModel = resolveModel(model).wireModel; session.model = session.requestedModel; }
   // Perfis de endpoint rodam no loop próprio do Brito, não dentro do claude: aqui o /model só avisa como reabrir.
   const modelCmd = modelCommand(() => session.requestedModel || session.model, (m) => { session.requestedModel = m; session.model = m; }, "(assinatura do claude CLI)",
     (m) => { const r = resolveModel(m); return r.kind === "openai" ? `o ${r.label} roda no modo API: reabra com \`brito --model ${r.name}\`` : null; });
@@ -439,7 +439,7 @@ program
     const agent = new Agent(() => buildSystemPrompt(root, graphStatsLine(symCount, noteCount, "now"), skillsIndex(root)) + (perms.mode === "plan" ? PLAN_NOTE : ""), ctx, { model: startModel });
     ctx.model = () => agent.model; // subagentes seguem o modelo vivo
     ui.reasoning = loadReasoningDisplay();
-    const learnModel = () => process.env.BRITO_LEARN_MODEL ?? agent.model;
+    const learnModel = () => learnerModel(agent.model, process.env);
     loadProjectAgents(root);
 
     /** Depois de tarefas complexas (ou uso de skill), propõe criar/melhorar skills. */

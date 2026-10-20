@@ -21,6 +21,8 @@ export class ChatStreamAccumulator {
 
   push(chunk: any): { text?: string; thinking?: string } {
     const out: { text?: string; thinking?: string } = {};
+    // O vLLM manda falhas depois que o stream começou como `data: {"error": …}`.
+    if (chunk?.error) throw new Error(`o endpoint falhou no meio da resposta: ${chunk.error.message ?? JSON.stringify(chunk.error)}`);
     if (chunk?.usage) this.usage = chunk.usage;
     const choice = chunk?.choices?.[0];
     if (!choice) return out;
@@ -42,6 +44,9 @@ export class ChatStreamAccumulator {
     if (visible.length > this.emitted) { out.text = visible.slice(this.emitted); this.emitted = visible.length; }
     return out;
   }
+
+  /** O servidor disse que terminou? Sem isso, a conexão caiu no meio. */
+  get finished(): boolean { return this.finish !== null; }
 
   /** Raciocínio ainda não entregue (uma vez só). */
   flushThinking(): { thinking?: string } {
@@ -114,6 +119,7 @@ export class OpenAICompatProvider implements ModelProvider {
       if (out.thinking) hooks.onThinking?.(out.thinking);
       if (out.text) hooks.onText?.(out.text);
     }
+    if (!acc.finished) throw new Error(`a conexão com o endpoint ${p.label} caiu antes do fim da resposta`);
     const last = acc.flushThinking();
     if (last.thinking) hooks.onThinking?.(last.thinking);
     const { reasoning: _r, ...msg } = acc.finishMessage();

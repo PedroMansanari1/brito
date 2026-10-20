@@ -20,7 +20,7 @@ test("perfil válido vira openai", () => {
   config({ qwen: QWEN });
   assert.deepEqual(resolveModel("qwen"), {
     kind: "openai", name: "qwen", wireModel: "endpoint-ocid-de-teste", label: "qwen", contextWindow: 262144,
-    profile: { name: "qwen", type: "openai", label: "qwen", baseURL: QWEN.baseURL, model: QWEN.model, apiKeyEnv: "BRITO_TESTE_KEY", contextWindow: 262144, vision: false },
+    profile: { name: "qwen", type: "openai", label: "qwen", baseURL: QWEN.baseURL, model: QWEN.model, apiKeyEnv: "BRITO_TESTE_KEY", contextWindow: 262144, vision: false, thinkingToggle: false },
   });
   assert.equal(resolveModel("QWEN").kind, "openai");
 });

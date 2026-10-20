@@ -153,23 +153,26 @@ const isText = (v: unknown): v is string => typeof v === "string" && v.trim() !=
  * Perfis de endpoint compatível com OpenAI (`providers` no config). Relido a cada chamada: é barato e o config muda
  * durante a sessão. Perfil inválido não derruba o Brito: fica de fora e o motivo vai em `errors`.
  */
-export function loadProfiles(): { profiles: Record<string, OpenAIProfile>; errors: string[] } {
+export function loadProfiles(): { profiles: Record<string, OpenAIProfile>; errors: string[]; rejected: string[] } {
   let raw: unknown;
-  try { raw = JSON.parse(readFileSync(configPath(), "utf8"))?.providers; } catch { return { profiles: {}, errors: [] }; }
+  try { raw = JSON.parse(readFileSync(configPath(), "utf8"))?.providers; } catch { return { profiles: {}, errors: [], rejected: [] }; }
   const profiles: Record<string, OpenAIProfile> = {};
   const errors: string[] = [];
-  if (!raw || typeof raw !== "object") return { profiles, errors };
+  /** nomes de perfis inválidos: escolher um deles é erro, nunca cair no Claude */
+  const rejected: string[] = [];
+  if (!raw || typeof raw !== "object") return { profiles, errors, rejected };
   for (const [key, v] of Object.entries(raw as Record<string, any>)) {
     const name = key.trim().toLowerCase();
     const missing = (["baseURL", "model", "apiKeyEnv"] as const).filter((f) => !isText(v?.[f]));
-    if (v?.type !== "openai") { errors.push(`perfil "${key}" ignorado: type precisa ser "openai"`); continue; }
-    if (missing.length) { errors.push(`perfil "${key}" ignorado: faltam ${missing.join(", ")}`); continue; }
+    if (v?.type !== "openai") { errors.push(`perfil "${key}" ignorado: type precisa ser "openai"`); rejected.push(name); continue; }
+    if (missing.length) { errors.push(`perfil "${key}" ignorado: faltam ${missing.join(", ")}`); rejected.push(name); continue; }
     profiles[name] = {
       name, type: "openai", label: isText(v.label) ? v.label.trim() : name,
       baseURL: v.baseURL.trim(), model: v.model.trim(), apiKeyEnv: v.apiKeyEnv.trim(),
       contextWindow: Number(v.contextWindow) > 0 ? Number(v.contextWindow) : 128_000,
       vision: v.vision === true,
+      thinkingToggle: v.thinkingToggle === true,
     };
   }
-  return { profiles, errors };
+  return { profiles, errors, rejected };
 }

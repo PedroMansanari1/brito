@@ -94,14 +94,17 @@ export class Agent {
 
     for (let step = 0; step < this.maxSteps; step++) {
       if (signal?.aborted) throw new Error("abort");
+      // Num endpoint com raciocínio, pensar e responder dividem o mesmo orçamento: dobra para não cortar a resposta.
+      const target = resolveModel(this.model);
+      const thinking = this.effort !== "none";
       const msg = await providerFor(this.model).send(
         {
           model: this.model,
-          maxTokens: 8192,
+          maxTokens: target.kind === "openai" && thinking ? 16_384 : 8192,
           system: typeof this.system === "function" ? this.system() : this.system,
           tools: toApiTools(this.opts.tools),
           messages: this.messages,
-          thinking: this.effort !== "none",
+          thinking,
         },
         { signal, onText: this.opts.quiet ? undefined : (t) => this.ui.text(t), onThinking: this.opts.quiet ? undefined : (t) => this.ui.thinking(t) },
       );
@@ -110,13 +113,21 @@ export class Agent {
       this.usage.output += msg.usage.output;
       this.usage.cacheRead += msg.usage.cacheRead;
       this.usage.steps++;
-      push({ role: "assistant", content: msg.content });
+      if (msg.stopReason === "max_tokens") this.log("⚠ resposta cortada pelo limite de tokens; peça para continuar ou desligue o raciocínio (/reasoning none)");
+      // Mensagem vazia não entra no histórico: a API da Anthropic recusaria o próximo turno.
+      if (msg.content.length) push({ role: "assistant", content: msg.content });
 
       const text = msg.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
       if (text) finalText = text;
       if (!this.opts.quiet) this.ui.textEnd();
 
       const uses = msg.content.filter((b): b is Extract<OutBlock, { type: "tool_use" }> => b.type === "tool_use");
+      if (uses.length && msg.stopReason !== "tool_use") {
+        // Chamada de tool cortada no meio: fecha cada uma com erro para o histórico continuar válido.
+        push({ role: "user", content: uses.map((u) => ({ type: "tool_result" as const, tool_use_id: u.id, content: "Chamada cortada antes de terminar (limite de tokens); não foi executada.", is_error: true })) });
+        turn.finished = true;
+        return finalText;
+      }
       if (msg.stopReason !== "tool_use" || uses.length === 0) { turn.finished = true; return finalText; }
 
       const runOne = async (u: Extract<OutBlock, { type: "tool_use" }>): Promise<Anthropic.ToolResultBlockParam> => {

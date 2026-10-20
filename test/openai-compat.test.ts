@@ -7,7 +7,7 @@ import type { ModelRequest, OpenAIProfile } from "../src/provider/types.js";
 
 const FIX = path.join(import.meta.dirname, "fixtures", "openai-compat");
 const fixture = (f: string) => fs.readFileSync(path.join(FIX, f), "utf8");
-const PERFIL: OpenAIProfile = { name: "qwen", type: "openai", label: "Qwen", baseURL: "https://endpoint.invalido/openai/v1/", model: "endpoint-ocid-de-teste", apiKeyEnv: "BRITO_TESTE_KEY", contextWindow: 262144, vision: false };
+const PERFIL: OpenAIProfile = { name: "qwen", type: "openai", label: "Qwen", baseURL: "https://endpoint.invalido/openai/v1/", model: "endpoint-ocid-de-teste", apiKeyEnv: "BRITO_TESTE_KEY", contextWindow: 262144, vision: false, thinkingToggle: false };
 const ENV = { BRITO_TESTE_KEY: "chave-de-teste" };
 const REQ: ModelRequest = { model: "qwen", system: "S", messages: [{ role: "user", content: "oi" }], maxTokens: 400 };
 
@@ -128,4 +128,15 @@ test("URL sem barra dupla e header Authorization", async () => {
   await new OpenAICompatProvider(PERFIL, f, ENV).send(REQ);
   assert.equal(calls[0].url, "https://endpoint.invalido/openai/v1/chat/completions");
   assert.equal((calls[0].init.headers as Record<string, string>).authorization, "Bearer chave-de-teste");
+});
+
+test("erro no meio do stream vira exceção com a mensagem do servidor", async () => {
+  const ini = fixture("text-stream.sse").split("\n\n").slice(0, 4).join("\n\n");
+  const body = `${ini}\n\ndata: {"error":{"message":"boom no vLLM","code":500}}\n\ndata: [DONE]\n\n`;
+  await assert.rejects(new OpenAICompatProvider(PERFIL, fakeFetch([sse(body)]).f, ENV).send(REQ), /boom no vLLM/);
+});
+
+test("stream que termina sem finish_reason é conexão cortada", async () => {
+  const corte = fixture("text-stream.sse").split("\n").filter((l) => !/finish_reason":"|"usage"|\[DONE\]/.test(l)).join("\n");
+  await assert.rejects(new OpenAICompatProvider(PERFIL, fakeFetch([sse(corte)]).f, ENV).send(REQ), /antes do fim/);
 });

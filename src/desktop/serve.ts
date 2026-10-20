@@ -17,7 +17,7 @@ import { buildSystemPrompt, graphStatsLine } from "../agent/prompt.js";
 import type { TurnSink } from "../agent/sink.js";
 import { GraphStore } from "../graph/store.js";
 import { indexProject } from "../graph/indexer.js";
-import { initialEffort, initialModel, isEffort, MODEL_ALIASES } from "../model.js";
+import { initialEffort, initialModel, isEffort, loadProfiles, MODEL_ALIASES } from "../model.js";
 import { pickEngine } from "../engine.js";
 import { contextWindowFor, resolveModel } from "../provider/resolve.js";
 import { PLAN_NOTE, perms, type PermMode } from "../permissions.js";
@@ -73,6 +73,7 @@ export async function serveDesktop(root: string, resumeId?: string): Promise<voi
 
   // Na pasta pessoal (projeto "Home") indexar tudo seria enorme e inútil: sem índice ali.
   const isHome = path.resolve(root) === path.resolve(os.homedir());
+  for (const e of loadProfiles().errors) emit({ t: "warn", msg: e });
   const startModel = initialModel();
   const picked = pickEngine(startModel, process.env, hasClaudeCli);
   const useApi = picked.kind === "api";
