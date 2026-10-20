@@ -8,7 +8,8 @@ import { MCP_NAME, MCP_PREFIX, APPROVE_TOOL } from "../mcp/server.js";
 import { ui as terminalUi } from "../ui/ui.js";
 import type { TurnSink } from "./sink.js";
 import { MODE_ENV, perms, type PermMode } from "../permissions.js";
-import { wireEffort } from "../model.js";
+import { DEFAULT_MODEL, wireEffort } from "../model.js";
+import { subagentModel } from "../engine.js";
 import type { TurnRecord } from "./loop.js";
 import { claudeCommand } from "../util/platform.js";
 import { fmtBytes, findImages, splitOversize } from "../util/images.js";
@@ -36,7 +37,7 @@ function claudeAgents(): Record<string, unknown> {
       description: a.description,
       prompt: a.prompt,
       ...(a.tools === "all" ? {} : { tools: a.tools.map(claudeToolName) }),
-      ...(a.model?.includes("haiku") ? { model: "haiku" } : {}),
+      ...(subagentModel(a, DEFAULT_MODEL, process.env).includes("haiku") ? { model: "haiku" } : {}),
     };
   }
   return out;
