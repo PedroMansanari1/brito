@@ -15,7 +15,7 @@ import { loadProjectAgents, listAgents } from "./agent/agents.js";
 import { GraphLockedError, GraphStore } from "./graph/store.js";
 import { indexProject } from "./graph/indexer.js";
 import { Agent, MODEL } from "./agent/loop.js";
-import { EFFORTS, MODEL_ALIASES, MODEL_HELP, effortLabel, initialEffort, isEffort, loadReasoningDisplay, parseModelArgs, saveEffort, saveModel, saveReasoningDisplay, type Effort, type ModelScope } from "./model.js";
+import { EFFORTS, MODEL_ALIASES, modelHelp, effortLabel, initialEffort, isEffort, loadReasoningDisplay, parseModelArgs, saveEffort, saveModel, saveReasoningDisplay, type Effort, type ModelScope } from "./model.js";
 import { hasClaudeCli, ClaudeSession } from "./agent/claude-cli.js";
 import { startApprovalServer } from "./agent/approval.js";
 import { serveMcp } from "./mcp/server.js";
@@ -219,7 +219,7 @@ function modelCommand(get: () => string, set: (m: string) => void, note: string)
         const req = parseModelArgs(args.join(" "));
         if (req.errors.length) { for (const e of req.errors) ui.warn(e); return; }
         if (!req.model) {
-          if (!ui.canSelect) { ui.print(`  ${c.soft(get())} ${c.muted(note)}\n  ${c.muted(MODEL_HELP)}`); return; }
+          if (!ui.canSelect) { ui.print(`  ${c.soft(get())} ${c.muted(note)}\n  ${c.muted(modelHelp())}`); return; }
           const picked = await pickModel(get());
           if (!picked) { ui.info("cancelado"); return; }
           req.model = picked.model;
