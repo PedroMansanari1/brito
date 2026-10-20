@@ -174,6 +174,35 @@ O Brito **não tem drivers de banco e não se conecta a nada sozinho**. Quando p
 - Prefira papéis somente leitura e ambientes que não sejam de produção ao dar acesso a banco para um agente.
 - Uma skill proposta que contém comando destrutivo é destacada na revisão, para você decidir se precisa de uma guarda (backup, cópia, confirmação).
 
+## Endpoint compatível com OpenAI (ex.: Qwen no OCI)
+
+Além do Claude, o Brito roda com qualquer modelo servido pela API **Chat Completions** da OpenAI (vLLM, OCI Generative AI, LiteLLM, Ollama…) com chamada de ferramentas. Cadastre um perfil em `~/.brito/config.json`:
+
+```json
+{
+  "providers": {
+    "qwen": {
+      "type": "openai",
+      "label": "Qwen 27B (OCI)",
+      "baseURL": "https://inference.generativeai.<região>.oci.oraclecloud.com/openai/v1",
+      "model": "<id do modelo; no OCI, o OCID do endpoint dedicado>",
+      "apiKeyEnv": "BRITO_QWEN_API_KEY",
+      "contextWindow": 262144,
+      "vision": false
+    }
+  }
+}
+```
+
+A chave **não** fica no config: ponha na variável de ambiente indicada em `apiKeyEnv`. Depois:
+
+```bash
+brito --model qwen            # esta sessão
+/model qwen --global          # dentro do REPL: vira o padrão
+```
+
+Com um perfil escolhido, **tudo** vai para o endpoint: agente principal, subagentes (o `explore` deixa de usar o Haiku), resumo de contexto e aprendizado de skills; o Brito abre sem `ANTHROPIC_API_KEY` e sem o `claude` CLI. `/reasoning none` desliga o raciocínio do modelo (respostas bem mais rápidas no Qwen). Imagens só são enviadas com `"vision": true`. `/effort` continua exclusivo do modo `claude` CLI, e um perfil não roda dentro do `claude` CLI (o `/model` avisa para reabrir com `--model`).
+
 ## Configuração
 
 `BRITO_MODEL`, `BRITO_EFFORT`, `BRITO_EXPLORE_MODEL`, `BRITO_LEARN_MODEL`, `BRITO_HOME` (onde ficam skills globais e histórico), `BRITO_CONFIG`, `BRITO_COLOR`, `BRITO_BANNER` (`compact` ou `full`; padrão: tela cheia em janelas de 95+ colunas e 28+ linhas), `BRITO_INDEX_IGNORED`, `BRITO_SKILL_MIN_TOOLS` (tamanho mínimo do turno para disparar a reflexão quando nada mais dispara), `BRITO_SKILLS` (`auto` padrão, `ask`, `off`), `BRITO_SHELL` (shell da tool `bash`; no Windows usa o Git Bash se instalado).

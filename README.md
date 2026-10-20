@@ -178,6 +178,35 @@ Brito has **no database drivers and connects to nothing on its own**. When it ne
 - Prefer read-only roles and non-production environments when you give an agent database access.
 - A proposed skill that contains a destructive command is highlighted at review time, so you decide whether it needs a guard (backup, copy, confirmation).
 
+## OpenAI-compatible endpoint (e.g. Qwen on OCI)
+
+Besides Claude, Brito runs on any model served through the OpenAI **Chat Completions** API (vLLM, OCI Generative AI, LiteLLM, Ollama…) with tool calling. Add a profile to `~/.brito/config.json`:
+
+```json
+{
+  "providers": {
+    "qwen": {
+      "type": "openai",
+      "label": "Qwen 27B (OCI)",
+      "baseURL": "https://inference.generativeai.<region>.oci.oraclecloud.com/openai/v1",
+      "model": "<model id; on OCI, the dedicated endpoint OCID>",
+      "apiKeyEnv": "BRITO_QWEN_API_KEY",
+      "contextWindow": 262144,
+      "vision": false
+    }
+  }
+}
+```
+
+The key is **not** stored in the config: put it in the environment variable named by `apiKeyEnv`. Then:
+
+```bash
+brito --model qwen            # this session
+/model qwen --global          # inside the REPL: make it the default
+```
+
+With a profile selected, **everything** goes to the endpoint: main agent, subagents (`explore` stops using Haiku), context summaries and skill learning; Brito starts without `ANTHROPIC_API_KEY` and without the `claude` CLI. `/reasoning none` turns the model's reasoning off (much faster answers on Qwen). Images are only sent with `"vision": true`. `/effort` stays exclusive to `claude` CLI mode, and a profile does not run inside the `claude` CLI (`/model` tells you to reopen with `--model`).
+
 ## Configuration
 
 `BRITO_MODEL`, `BRITO_EFFORT`, `BRITO_EXPLORE_MODEL`, `BRITO_LEARN_MODEL`, `BRITO_HOME` (where global skills and history live), `BRITO_CONFIG`, `BRITO_COLOR`, `BRITO_BANNER` (`compact` or `full`; default: full screen on windows of 95+ columns and 28+ rows), `BRITO_INDEX_IGNORED`, `BRITO_SKILL_MIN_TOOLS` (how long a turn must be to trigger reflection when nothing else does), `BRITO_SKILLS` (`auto` default, `ask`, `off`), `BRITO_SHELL` (shell used by the `bash` tool; on Windows defaults to Git Bash when installed).
