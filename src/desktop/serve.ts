@@ -17,7 +17,9 @@ import { buildSystemPrompt, graphStatsLine } from "../agent/prompt.js";
 import type { TurnSink } from "../agent/sink.js";
 import { GraphStore } from "../graph/store.js";
 import { indexProject } from "../graph/indexer.js";
-import { DEFAULT_MODEL, initialEffort, initialModel, isEffort, MODEL_ALIASES } from "../model.js";
+import { initialEffort, initialModel, isEffort, MODEL_ALIASES } from "../model.js";
+import { pickEngine } from "../engine.js";
+import { contextWindowFor, resolveModel } from "../provider/resolve.js";
 import { PLAN_NOTE, perms, type PermMode } from "../permissions.js";
 import { skillsIndex } from "../skills/store.js";
 import type { ToolContext } from "../tools/registry.js";
@@ -26,7 +28,8 @@ import type { ToolContext } from "../tools/registry.js";
  * Backend do app desktop, controlado por JSON em linhas.
  * stdin  → {t:"send",text} {t:"abort"} {t:"approve",id,allow} {t:"config",model?,effort?,mode?} {t:"reset"} {t:"quit"}
  * stdout → linhas "@@{json}" (qualquer outra linha, como logs perdidos, a janela ignora).
- * Motor: com ANTHROPIC_API_KEY usa a API direta (como o `brito` no terminal); sem ela, o `claude` CLI (assinatura).
+ * Motor: perfil de endpoint (ex.: Qwen) ou ANTHROPIC_API_KEY usam o loop próprio (como o `brito` no terminal); sem
+ * nada disso, o `claude` CLI (assinatura).
  */
 const MARK = "@@";
 const emit = (ev: Record<string, unknown>) => process.stdout.write(MARK + JSON.stringify(ev) + "\n");
@@ -58,7 +61,6 @@ interface Engine {
   close(): Promise<void>;
 }
 
-const CTX_WINDOW = Number(process.env.BRITO_CONTEXT_WINDOW ?? 200_000);
 
 export async function serveDesktop(root: string, resumeId?: string): Promise<void> {
   const pending = new Map<string, (ok: boolean) => void>();
@@ -71,9 +73,12 @@ export async function serveDesktop(root: string, resumeId?: string): Promise<voi
 
   // Na pasta pessoal (projeto "Home") indexar tudo seria enorme e inútil: sem índice ali.
   const isHome = path.resolve(root) === path.resolve(os.homedir());
-  const useApi = !!process.env.ANTHROPIC_API_KEY;
-  if (!useApi && !hasClaudeCli()) {
-    emit({ t: "error", msg: "Sem acesso ao modelo: defina ANTHROPIC_API_KEY (no seu shell) ou instale o Claude Code e rode `claude` → /login." });
+  const startModel = initialModel();
+  const picked = pickEngine(startModel, process.env, hasClaudeCli);
+  const useApi = picked.kind === "api";
+  if (picked.kind === "error") {
+    const msg = resolveModel(startModel).kind === "openai" ? picked.message : "Sem acesso ao modelo: defina ANTHROPIC_API_KEY (no seu shell) ou instale o Claude Code e rode `claude` → /login.";
+    emit({ t: "error", msg });
     process.exit(1);
   }
   loadProjectAgents(root);
@@ -92,10 +97,10 @@ export async function serveDesktop(root: string, resumeId?: string): Promise<voi
     emit({ t: "info", msg: "sincronizando grafo…" });
     try { await sync(); } catch (e: any) { emit({ t: "warn", msg: `grafo indisponível: ${e?.message ?? e}` }); }
     try { notes = Number((await graph.run("MATCH (s:Note) RETURN count(s) AS n"))[0].n); } catch { /* sem notas */ }
-    const ctx: ToolContext = { root, graph, ask, sync, dirty: false, loadedSkills: new Set() };
+    const ctx: ToolContext = { root, graph, ask, sync, dirty: false, loadedSkills: new Set(), model: () => agent.model };
     const agent = new Agent(
       () => buildSystemPrompt(root, graphStatsLine(syms, notes, "now"), skillsIndex(root)) + (perms.mode === "plan" ? PLAN_NOTE : ""),
-      ctx, { model: initialModel(), sink },
+      ctx, { model: startModel, sink },
     );
     let ac: AbortController | null = null;
     const id = randomUUID();
@@ -112,7 +117,7 @@ export async function serveDesktop(root: string, resumeId?: string): Promise<voi
       },
       abort: () => ac?.abort(),
       reset: () => { agent.messages = []; agent.contextTokens = 0; agent.recentTurns = []; agent.lastTurn = null; },
-      stats: () => ({ usage: agent.usage, contextTokens: agent.contextTokens, contextWindow: CTX_WINDOW, costUsd: 0 }),
+      stats: () => ({ usage: agent.usage, contextTokens: agent.contextTokens, contextWindow: contextWindowFor(agent.model), costUsd: 0 }),
       close: async () => { await graph.close(); },
     } as Engine;
   } else {
@@ -173,7 +178,7 @@ export async function serveDesktop(root: string, resumeId?: string): Promise<voi
       case "approve": pending.get(m.id)?.(!!m.allow); pending.delete(m.id); break;
       case "config": {
         if (typeof m.model === "string" && m.model) engine.setModel(MODEL_ALIASES[m.model] ?? m.model);
-        else if (m.model === "") engine.setModel(engine.kind === "api" ? DEFAULT_MODEL : "");
+        else if (m.model === "") engine.setModel(engine.kind === "api" ? initialModel() : ""); // padrão = modelo/perfil salvo
         if (m.effort !== undefined) engine.effort = isEffort(m.effort) ? m.effort : "";
         if (["manual", "auto", "plan", "bypass"].includes(m.mode)) perms.mode = m.mode as PermMode;
         ready();

@@ -14,9 +14,11 @@ import { PLAN_NOTE, perms, describeClaudeTool } from "./permissions.js";
 import { loadProjectAgents, listAgents } from "./agent/agents.js";
 import { GraphLockedError, GraphStore } from "./graph/store.js";
 import { indexProject } from "./graph/indexer.js";
-import { Agent, MODEL } from "./agent/loop.js";
-import { EFFORTS, MODEL_ALIASES, modelHelp, effortLabel, initialEffort, isEffort, loadReasoningDisplay, parseModelArgs, saveEffort, saveModel, saveReasoningDisplay, type Effort, type ModelScope } from "./model.js";
+import { Agent } from "./agent/loop.js";
+import { EFFORTS, MODEL_ALIASES, modelHelp, effortLabel, initialEffort, initialModel, loadProfiles, isEffort, loadReasoningDisplay, parseModelArgs, saveEffort, saveModel, saveReasoningDisplay, type Effort, type ModelScope } from "./model.js";
 import { hasClaudeCli, ClaudeSession } from "./agent/claude-cli.js";
+import { pickEngine } from "./engine.js";
+import { compactAtFor, contextWindowFor, resolveModel } from "./provider/resolve.js";
 import { startApprovalServer } from "./agent/approval.js";
 import { serveMcp } from "./mcp/server.js";
 import "./tools/skills.js";
@@ -115,8 +117,12 @@ async function migrationAsk(q: string): Promise<boolean> {
 /** Sem API key: o `claude` oficial (login da assinatura) faz o modelo; grafo/memória/skills chegam via MCP. */
 /** Menus ↑↓+Enter do `/model`: modelo e depois escopo. null = cancelado. */
 async function pickModel(current: string): Promise<{ model: string; scope: ModelScope } | null> {
-  const models = Object.entries(MODEL_ALIASES);
-  const mi = await ui.select("modelo", models.map(([alias, id]) => ({ label: alias, hint: id === current ? `${id} (atual)` : id })), Math.max(0, models.findIndex(([, id]) => id === current)));
+  // Aliases do Claude e perfis de endpoint (o perfil é escolhido pelo nome; o id dele é detalhe do config).
+  const models: [string, string, string][] = [
+    ...Object.entries(MODEL_ALIASES).map(([alias, id]): [string, string, string] => [alias, id, id]),
+    ...Object.values(loadProfiles().profiles).map((p): [string, string, string] => [p.name, p.name, p.label]),
+  ];
+  const mi = await ui.select("modelo", models.map(([alias, id, hint]) => ({ label: alias, hint: id === current ? `${hint} (atual)` : hint })), Math.max(0, models.findIndex(([, id]) => id === current)));
   if (mi === null) return null;
   const scopes: { scope: ModelScope; label: string; hint: string }[] = [
     { scope: "session", label: "esta sessão", hint: "vale até fechar o Brito" },
@@ -209,7 +215,7 @@ function reasoningCommand(get: () => string, set: (e: string) => void) {
  * `/model [nome|alias] [--global|--session|--once]` (mesma semântica do Hermes). Vale para os dois backends:
  * `get`/`set` leem e trocam o modelo vivo; `--once` devolve o anterior depois do turno (`restoreOnce`).
  */
-function modelCommand(get: () => string, set: (m: string) => void, note: string) {
+function modelCommand(get: () => string, set: (m: string) => void, note: string, veto: (m: string) => string | null = () => null) {
   let restore: string | null = null;
   return {
     restoreOnce: () => { if (restore !== null) { set(restore); restore = null; } },
@@ -225,6 +231,8 @@ function modelCommand(get: () => string, set: (m: string) => void, note: string)
           req.model = picked.model;
           req.scope = picked.scope;
         }
+        const refused = veto(req.model);
+        if (refused) { ui.warn(refused); return; }
         const old = get();
         if (req.scope === "once") restore ??= old; // dois --once seguidos devolvem o modelo original, não o intermediário
         set(req.model);
@@ -238,14 +246,14 @@ function modelCommand(get: () => string, set: (m: string) => void, note: string)
 }
 
 /** `/skills`: lista, revisa propostas pendentes e consolida a biblioteca. Vale para os dois backends. */
-const skillsCommand = (root: string, io: { ask: (q: string, opts?: { force?: boolean }) => Promise<boolean> }, llm: { complete: Complete; model: string }) => ({
+const skillsCommand = (root: string, io: { ask: (q: string, opts?: { force?: boolean }) => Promise<boolean> }, llm: { complete: Complete; model: () => string }) => ({
   desc: "lista skills; pending | approve <nome> | reject <nome> | consolidate",
   run: async ([sub, name]: string[]) => {
     if (sub === "consolidate") {
       ui.info("✦ analisando a biblioteca de skills…");
       ui.turnStart();
       let proposals: Proposal[];
-      try { proposals = await proposeConsolidation(root, llm.model, llm.complete); ui.turnEnd(false); }
+      try { proposals = await proposeConsolidation(root, llm.model(), llm.complete); ui.turnEnd(false); }
       catch (e: any) { ui.turnEnd(false); ui.error(`consolidação falhou: ${e?.message ?? e}`); return; }
       if (!proposals.length) { ui.info("✦ biblioteca saudável, nada a consolidar"); return; }
       for (const p of proposals) {
@@ -292,8 +300,9 @@ const skillsCommand = (root: string, io: { ask: (q: string, opts?: { force?: boo
 });
 
 /** Reflexão pós-turno que propõe skills (gatilho automático ou `/learn`). Independe do backend: só muda a origem do turno e o modelo. */
-function makeLearner(getTurns: () => TurnRecord[], ctx: ToolContext, complete: Complete, model: string) {
+function makeLearner(getTurns: () => TurnRecord[], ctx: ToolContext, complete: Complete, getModel: () => string) {
   return async (force = false) => {
+    const model = getModel();
     const turns = getTurns();
     const turn = turns[turns.length - 1] ?? null;
     // O resultado do turno vira evidência para as skills usadas nele (promoção/arquivamento), antes de refletir.
@@ -314,7 +323,7 @@ function makeLearner(getTurns: () => TurnRecord[], ctx: ToolContext, complete: C
   };
 }
 
-async function runViaClaude(root: string, promptParts: string[], yes: boolean) {
+async function runViaClaude(root: string, promptParts: string[], yes: boolean, model?: string) {
   const startedAt = Date.now();
   if (yes) perms.mode = "bypass";
   // O REPL troca `io.ask`; em prompt único cai na pergunta simples.
@@ -338,7 +347,7 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean) {
 
   // O grafo já foi solto para o servidor MCP; skill_save só usa o store de skills, então `graph` não é tocado.
   const learnCtx: ToolContext = { root, graph: undefined as unknown as GraphStore, ask: (q, opts) => io.ask(q, opts), sync: async () => {}, dirty: false, loadedSkills: session.loadedSkills };
-  const learn = makeLearner(() => session.recentTurns, learnCtx, claudeCliComplete, process.env.BRITO_LEARN_MODEL ?? ""); // "" = modelo padrão do claude
+  const learn = makeLearner(() => session.recentTurns, learnCtx, claudeCliComplete, () => process.env.BRITO_LEARN_MODEL ?? ""); // "" = modelo padrão do claude
 
   if (promptParts.length) {
     const ok = await session.send(promptParts.join(" "));
@@ -346,7 +355,10 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean) {
     return;
   }
 
-  const modelCmd = modelCommand(() => session.requestedModel || session.model, (m) => { session.requestedModel = m; session.model = m; }, "(assinatura do claude CLI)");
+  if (model) { session.requestedModel = resolveModel(model).wireModel; session.model = session.requestedModel; }
+  // Perfis de endpoint rodam no loop próprio do Brito, não dentro do claude: aqui o /model só avisa como reabrir.
+  const modelCmd = modelCommand(() => session.requestedModel || session.model, (m) => { session.requestedModel = m; session.model = m; }, "(assinatura do claude CLI)",
+    (m) => { const r = resolveModel(m); return r.kind === "openai" ? `o ${r.label} roda no modo API: reabra com \`brito --model ${r.name}\`` : null; });
   session.effort = initialEffort();
   ui.reasoning = loadReasoningDisplay();
   const unavailable = { desc: "indisponível no modo claude CLI", run: async () => { ui.warn("não está disponível no modo claude CLI"); } };
@@ -377,7 +389,7 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean) {
       },
       "/context": unavailable,
       "/learn": { desc: "extrai skills do último turno agora", run: async () => { await learn(true); } },
-      "/skills": skillsCommand(root, io, { complete: claudeCliComplete, model: process.env.BRITO_LEARN_MODEL ?? "" }),
+      "/skills": skillsCommand(root, io, { complete: claudeCliComplete, model: () => process.env.BRITO_LEARN_MODEL ?? "" }),
     },
     close: async () => {},
   };
@@ -396,15 +408,16 @@ program
   .argument("[prompt...]", "prompt único (omita para modo interativo)")
   .option("-d, --dir <dir>", "raiz do projeto")
   .option("-y, --yes", "aprovar edições e comandos automaticamente")
+  .option("-m, --model <nome>", "modelo ou perfil de endpoint (ex.: sonnet, qwen)")
   .action(async (promptParts: string[], o) => {
     // Trava anti-recursão: um brito iniciado por dentro de um claude que o próprio brito lançou (BRITO_DEPTH) pode abrir
     // outro claude, e assim por diante. Dois níveis bastam; mais que isso é laço de processos.
     if (Number(process.env.BRITO_DEPTH ?? 0) >= 2) { console.error("brito aninhado demais (BRITO_DEPTH): abortando para evitar laço de processos."); process.exit(1); }
-    if (!process.env.ANTHROPIC_API_KEY) {
-      if (!hasClaudeCli()) { console.error(c.err("Defina ANTHROPIC_API_KEY ou instale o Claude Code e rode `claude` → /login.")); process.exit(1); }
-      await runViaClaude(rootOf(o), promptParts, !!o.yes);
-      return;
-    }
+    for (const e of loadProfiles().errors) ui.warn(e);
+    const startModel: string = o.model ?? initialModel();
+    const engine = pickEngine(startModel, process.env, hasClaudeCli);
+    if (engine.kind === "error") { console.error(c.err(engine.message)); process.exit(1); }
+    if (engine.kind === "claude") { await runViaClaude(rootOf(o), promptParts, !!o.yes, o.model); return; }
     const root = rootOf(o);
     const startedAt = Date.now();
     { const { offerNoteMigration } = await import("./graph/migrate.js"); await offerNoteMigration(root, (q) => migrationAsk(q), (m) => ui.info(m)); }
@@ -423,11 +436,14 @@ program
     const io = { ask: async (q: string, _opts?: { force?: boolean }) => perms.mode === "bypass" || plainAsk(q) };
     const ctx: ToolContext = { root, graph, ask: (q, opts) => io.ask(q, opts), sync, dirty: false, loadedSkills: new Set() };
     // Função: o índice de skills e a contagem do grafo são relidos a cada passo e refletem o que mudou na sessão.
-    const agent = new Agent(() => buildSystemPrompt(root, graphStatsLine(symCount, noteCount, "now"), skillsIndex(root)) + (perms.mode === "plan" ? PLAN_NOTE : ""), ctx);
+    const agent = new Agent(() => buildSystemPrompt(root, graphStatsLine(symCount, noteCount, "now"), skillsIndex(root)) + (perms.mode === "plan" ? PLAN_NOTE : ""), ctx, { model: startModel });
+    ctx.model = () => agent.model; // subagentes seguem o modelo vivo
+    ui.reasoning = loadReasoningDisplay();
+    const learnModel = () => process.env.BRITO_LEARN_MODEL ?? agent.model;
     loadProjectAgents(root);
 
     /** Depois de tarefas complexas (ou uso de skill), propõe criar/melhorar skills. */
-    const learn = makeLearner(() => agent.recentTurns, ctx, defaultComplete, process.env.BRITO_LEARN_MODEL ?? MODEL);
+    const learn = makeLearner(() => agent.recentTurns, ctx, defaultComplete, learnModel);
 
     const turn = async (text: string, signal: AbortSignal) => {
       ui.turnStart();
@@ -449,7 +465,7 @@ program
       model: () => agent.model,
       contextTokens: () => agent.contextTokens,
       usage: () => agent.usage,
-      ctxWindow: CTX_WINDOW,
+      get ctxWindow() { return contextWindowFor(agent.model); },
       cost: () => (Number.isFinite(PRICE_IN) && Number.isFinite(PRICE_OUT) ? (agent.usage.input * PRICE_IN + agent.usage.output * PRICE_OUT) / 1e6 : undefined),
       turn,
       afterTurn: async () => { modelCmd.restoreOnce(); await learn(); },
@@ -457,17 +473,19 @@ program
       onShell: () => { ctx.dirty = true; }, // `!cmd` pode ter mudado o código
       commands: {
         "/model": modelCmd.cmd,
+        "/reasoning": reasoningCommand(() => agent.effort, (e) => { agent.effort = e; }),
         "/tools": { desc: "ferramentas disponíveis", run: async () => { for (const t of allTools()) ui.print(`  ${ui.toolLabel(t.name)}${c.dim(t.dangerous ? "  (pede aprovação)" : "")}`); } },
         "/context": {
           desc: "uso da janela de contexto",
           run: async () => {
-            const pct = Math.round((agent.contextTokens / CTX_WINDOW) * 100);
-            ui.print(`  ${c.soft(`${fmtTokens(agent.contextTokens)} / ${fmtTokens(CTX_WINDOW)}`)} ${c.muted(`(${pct}%) · ${agent.messages.length} mensagens · compacta em ~${fmtTokens(Number(process.env.BRITO_COMPACT_TOKENS ?? 120_000))}`)}`);
+            const win = contextWindowFor(agent.model);
+            const pct = Math.round((agent.contextTokens / win) * 100);
+            ui.print(`  ${c.soft(`${fmtTokens(agent.contextTokens)} / ${fmtTokens(win)}`)} ${c.muted(`(${pct}%) · ${agent.messages.length} mensagens · compacta em ~${fmtTokens(compactAtFor(agent.model))}`)}`);
           },
         },
         "/index": { desc: "reconstrói o grafo do zero", run: async () => { ui.info("reconstruindo grafo…"); ui.print(c.muted(JSON.stringify(await indexProject(root, graph, { full: true })))); } },
         "/learn": { desc: "extrai skills do último turno agora", run: async () => { await learn(true); } },
-        "/skills": skillsCommand(root, io, { complete: defaultComplete, model: process.env.BRITO_LEARN_MODEL ?? MODEL }),
+        "/skills": skillsCommand(root, io, { complete: defaultComplete, model: learnModel }),
       },
       close: async () => { await graph.close(); },
     };
