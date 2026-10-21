@@ -10,16 +10,18 @@ import "../tools/delegate.js";
 import "../tools/plan.js";
 import "../tools/skills.js";
 import { Agent } from "../agent/loop.js";
-import { ClaudeSession, hasClaudeCli } from "../agent/claude-cli.js";
+import { ClaudeSession, hasClaudeCli, historyForFallback } from "../agent/claude-cli.js";
 import { startApprovalServer } from "../agent/approval.js";
 import { loadProjectAgents } from "../agent/agents.js";
 import { buildSystemPrompt, graphStatsLine } from "../agent/prompt.js";
 import type { TurnSink } from "../agent/sink.js";
-import { GraphStore } from "../graph/store.js";
+import { openGraphAfterClaude } from "../graph/store.js";
 import { indexProject } from "../graph/indexer.js";
-import { initialEffort, initialModel, isEffort, loadProfiles, MODEL_ALIASES } from "../model.js";
-import { pickEngine } from "../engine.js";
+import { initialEffort, initialModel, isEffort, loadProfiles, MODEL_ALIASES, type Effort } from "../model.js";
+import { FALLBACK_PROFILE, NO_ANTHROPIC, fallbackStatus, openEngine } from "../engine.js";
+import { activateFallback, chooseModel, cliShouldFallBack, fallbackWarning, newFallbackState, renderFallback, retryPrompt, type FallbackState } from "../provider/fallback.js";
 import { contextWindowFor, resolveModel } from "../provider/resolve.js";
+import type { Msg } from "../provider/types.js";
 import { PLAN_NOTE, perms, type PermMode } from "../permissions.js";
 import { skillsIndex } from "../skills/store.js";
 import type { ToolContext } from "../tools/registry.js";
@@ -29,7 +31,8 @@ import type { ToolContext } from "../tools/registry.js";
  * stdin  → {t:"send",text} {t:"abort"} {t:"approve",id,allow} {t:"config",model?,effort?,mode?} {t:"reset"} {t:"quit"}
  * stdout → linhas "@@{json}" (qualquer outra linha, como logs perdidos, a janela ignora).
  * Motor: perfil de endpoint (ex.: Qwen) ou ANTHROPIC_API_KEY usam o loop próprio (como o `brito` no terminal); sem
- * nada disso, o `claude` CLI (assinatura).
+ * nada disso, o `claude` CLI (assinatura). Se o Claude cai por conta/capacidade (ou nem há conta), segue no qwen.
+ * `/fallback` enviado como texto responde o estado do fallback sem passar pelo modelo.
  */
 const MARK = "@@";
 const emit = (ev: Record<string, unknown>) => process.stdout.write(MARK + JSON.stringify(ev) + "\n");
@@ -53,14 +56,31 @@ interface Engine {
   sessionId: string;
   model: string;
   effort: string;
+  /** vazio = o padrão (modelo/perfil salvo) */
   setModel(id: string): void;
   send(text: string): Promise<void>;
   abort(): void;
   reset(): void;
   stats(): { usage: unknown; contextTokens: number; contextWindow?: number; costUsd: number };
   close(): Promise<void>;
+  /** estado do fallback Claude → qwen e o motor do principal, para o `/fallback` */
+  fallback: FallbackState;
+  engineLabel(model: string): string;
 }
 
+const apiLabel = (m: string) => (resolveModel(m).kind === "openai" ? "endpoint" : "API Anthropic");
+
+/** Como montar o loop próprio na abertura sem Claude ou na troca claude CLI → qwen; na abertura normal fica tudo no padrão. */
+interface ApiEngineOpts {
+  fallback?: FallbackState;
+  engineLabel?: (model: string) => string;
+  /** histórico herdado do claude CLI */
+  messages?: Msg[];
+  effort?: string;
+  loadedSkills?: Set<string>;
+  /** motor claude CLI de onde veio a troca: `config` com um Claude volta para ele */
+  back?: { engine: Engine; costUsd: () => number };
+}
 
 export async function serveDesktop(root: string, resumeId?: string): Promise<void> {
   const pending = new Map<string, (ok: boolean) => void>();
@@ -75,10 +95,9 @@ export async function serveDesktop(root: string, resumeId?: string): Promise<voi
   const isHome = path.resolve(root) === path.resolve(os.homedir());
   for (const e of loadProfiles().errors) emit({ t: "warn", msg: e });
   const startModel = initialModel();
-  const picked = pickEngine(startModel, process.env, hasClaudeCli);
-  const useApi = picked.kind === "api";
-  if (picked.kind === "error") {
-    const msg = resolveModel(startModel).kind === "openai" ? picked.message : "Sem acesso ao modelo: defina ANTHROPIC_API_KEY (no seu shell) ou instale o Claude Code e rode `claude` → /login.";
+  const opening = openEngine(startModel, process.env, hasClaudeCli);
+  if (opening.kind === "error") {
+    const msg = resolveModel(startModel).kind === "openai" ? opening.message : opening.message.replace(/^Defina ANTHROPIC_API_KEY/, "Sem acesso ao modelo: defina ANTHROPIC_API_KEY (no seu shell)");
     emit({ t: "error", msg });
     process.exit(1);
   }
@@ -88,28 +107,49 @@ export async function serveDesktop(root: string, resumeId?: string): Promise<voi
   let syms = 0, notes = 0;
   let closeApproval = () => {};
 
-  if (useApi) {
-    // API direta: o grafo fica aberto neste processo (sem servidor MCP), como no `brito` do terminal.
+  /** Loop próprio (API direta ou endpoint): o grafo fica aberto neste processo (sem servidor MCP), como no `brito` do terminal. */
+  const buildApiEngine = async (model: string, o: ApiEngineOpts = {}): Promise<Engine> => {
     // No Home o banco vai para ~/.brito/home-graph, para não criar .brito dentro da pasta pessoal.
     const graphRoot = isHome ? path.join(os.homedir(), ".brito", "home-graph") : root;
     fs.mkdirSync(graphRoot, { recursive: true });
-    const graph = await GraphStore.open(graphRoot);
+    // Na troca, o servidor MCP do claude pode ainda estar soltando o banco.
+    const graph = await openGraphAfterClaude(graphRoot);
     const sync = async () => { if (!isHome) syms = (await indexProject(root, graph)).symbols; };
     emit({ t: "info", msg: "sincronizando grafo…" });
     try { await sync(); } catch (e: any) { emit({ t: "warn", msg: `grafo indisponível: ${e?.message ?? e}` }); }
     try { notes = Number((await graph.run("MATCH (s:Note) RETURN count(s) AS n"))[0].n); } catch { /* sem notas */ }
-    const ctx: ToolContext = { root, graph, ask, sync, dirty: false, loadedSkills: new Set(), model: () => agent.model };
+    const ctx: ToolContext = { root, graph, ask, sync, dirty: false, loadedSkills: o.loadedSkills ?? new Set(), model: () => agent.model };
+    const fallback = o.fallback ?? newFallbackState(model);
     const agent = new Agent(
       () => buildSystemPrompt(root, graphStatsLine(syms, notes, "now"), skillsIndex(root)) + (perms.mode === "plan" ? PLAN_NOTE : ""),
-      ctx, { model: startModel, sink },
+      ctx, { model, sink, fallback },
     );
+    if (o.messages) agent.messages = o.messages;
+    if (o.effort) agent.effort = o.effort as Effort;
     let ac: AbortController | null = null;
     const id = randomUUID();
-    if (resumeId) emit({ t: "info", msg: "No modo API o histórico da conversa não é retomado ao reabrir; a tela mostra o que já foi dito, mas o modelo recomeça." });
-    engine = {
-      kind: "api", sessionId: id, effort: "",
+    return {
+      kind: "api", effort: "", fallback,
+      // Depois da troca o id segue o do claude: a janela o guarda para retomar a conversa ao reabrir.
+      get sessionId() { return o.back?.engine.sessionId ?? id; },
       get model() { return agent.model; }, set model(m: string) { agent.model = m; },
-      setModel: (m) => { agent.model = m; },
+      engineLabel: o.engineLabel ?? apiLabel,
+      setModel: (m) => {
+        const target = m || initialModel();
+        // Sem ANTHROPIC_API_KEY o Claude não roda neste loop: volta ao claude CLI de onde veio, ou segue no qwen.
+        if (resolveModel(target).kind === "anthropic" && !process.env.ANTHROPIC_API_KEY?.trim()) {
+          if (o.back) {
+            engine = o.back.engine;
+            engine.setModel(m);
+            chooseModel(fallback, engine.model);
+            graph.close().catch(() => {});
+            sink.warn("de volta ao claude CLI: a conversa do claude não inclui o que foi feito no qwen");
+          } else if (m) sink.warn(`o ${m} precisa de ANTHROPIC_API_KEY (ou do claude CLI); seguindo no ${agent.model}`);
+          return;
+        }
+        agent.model = target;
+        chooseModel(fallback, target);
+      },
       async send(text) {
         ac = new AbortController();
         sink.turnStart();
@@ -118,15 +158,26 @@ export async function serveDesktop(root: string, resumeId?: string): Promise<voi
       },
       abort: () => ac?.abort(),
       reset: () => { agent.messages = []; agent.contextTokens = 0; agent.recentTurns = []; agent.lastTurn = null; },
-      stats: () => ({ usage: agent.usage, contextTokens: agent.contextTokens, contextWindow: contextWindowFor(agent.model), costUsd: 0 }),
+      stats: () => ({ usage: agent.usage, contextTokens: agent.contextTokens, contextWindow: contextWindowFor(agent.model), costUsd: o.back?.costUsd() ?? 0 }),
       close: async () => { await graph.close(); },
     } as Engine;
+  };
+
+  if (opening.kind !== "claude") {
+    if (resumeId) emit({ t: "info", msg: "No modo API o histórico da conversa não é retomado ao reabrir; a tela mostra o que já foi dito, mas o modelo recomeça." });
+    if (opening.kind === "fallback") {
+      // Claude sem conta nenhuma, com o fallback pronto: a sessão já nasce no qwen (com aviso, nunca em silêncio).
+      emit({ t: "warn", msg: `⚠ ${NO_ANTHROPIC} (sem ANTHROPIC_API_KEY e sem o claude CLI) — abrindo no ${opening.label}. Envie /fallback para detalhes.` });
+      const fallback = newFallbackState(startModel);
+      activateFallback(fallback, NO_ANTHROPIC);
+      engine = await buildApiEngine(FALLBACK_PROFILE, { fallback, engineLabel: () => NO_ANTHROPIC });
+    } else engine = await buildApiEngine(startModel);
   } else {
     const approval = startApprovalServer({ ask });
     closeApproval = approval.close;
     // O banco aceita um único processo com escrita: indexa, lê as stats e solta o banco para o servidor MCP.
     if (!isHome) try {
-      const graph = await GraphStore.open(root);
+      const graph = await openGraphAfterClaude(root);
       emit({ t: "info", msg: "sincronizando grafo…" });
       await indexProject(root, graph);
       syms = Number((await graph.run("MATCH (s:Symbol) RETURN count(s) AS n"))[0].n);
@@ -141,22 +192,43 @@ export async function serveDesktop(root: string, resumeId?: string): Promise<voi
     });
     if (resumeId) session.resume(resumeId);
     session.effort = initialEffort();
-    engine = {
-      kind: "claude",
+    const fallback = newFallbackState(session.requestedModel || session.model);
+    const claude = {
+      kind: "claude", fallback,
       get sessionId() { return session.sessionId; },
       get model() { return session.model; },
       get effort() { return session.effort; }, set effort(e: string) { session.effort = e; },
-      setModel: (m) => { session.requestedModel = m; session.model = m || "claude (assinatura)"; },
-      send: async (text) => { await session.send(text); },
+      engineLabel: () => "claude CLI · assinatura",
+      setModel: (m) => { session.requestedModel = m; session.model = m || "claude (assinatura)"; if (m) chooseModel(fallback, m); },
+      send: async (text) => {
+        if (await session.send(text)) return;
+        // Caiu por conta/capacidade: monta o loop próprio no qwen com a conversa do claude e refaz o pedido nele.
+        const status = fallbackStatus(fallback.primary, process.env);
+        const f = session.lastFailure;
+        if (!f || !status.ready || !cliShouldFallBack(f, fallback, status)) return;
+        sink.warn(fallbackWarning(f.kind, f.message, status.label));
+        let api: Engine;
+        try {
+          api = await buildApiEngine(status.name, {
+            fallback, engineLabel: () => "claude CLI · assinatura", messages: historyForFallback(session.allTurns),
+            effort: session.effort, loadedSkills: session.loadedSkills, back: { engine: claude, costUsd: () => session.costUsd },
+          });
+        } catch (e: any) { sink.error(`não consegui abrir o ${status.label}: ${e?.message ?? e}`); return; }
+        activateFallback(fallback, `${f.kind} (${f.message})`);
+        engine = api;
+        ready();
+        await api.send(retryPrompt(text));
+      },
       abort: () => session.abort(),
       reset: () => session.reset(),
       stats: () => ({ usage: session.usage, contextTokens: session.contextTokens, contextWindow: session.contextWindow, costUsd: session.costUsd }),
       close: async () => {},
     } as Engine;
+    engine = claude;
   }
 
   let busy = false;
-  const ready = () => emit({ t: "ready", engine: engine.kind, sessionId: engine.sessionId, model: engine.model, effort: engine.effort, mode: perms.mode, symbols: syms, notes, root });
+  const ready = () => emit({ t: "ready", engine: engine.kind, sessionId: engine.sessionId, model: engine.model, effort: engine.effort, mode: perms.mode, symbols: syms, notes, root, fallback: engine.fallback.active });
   ready();
 
   const rl = readline.createInterface({ input: process.stdin });
@@ -168,18 +240,24 @@ export async function serveDesktop(root: string, resumeId?: string): Promise<voi
     switch (m.t) {
       case "send": {
         if (busy) return emit({ t: "warn", msg: "já existe um turno em andamento" });
+        if (String(m.text ?? "").trim() === "/fallback") {
+          const fb = engine.fallback;
+          const primary = fb.active ? fb.primary : engine.model;
+          const lines = renderFallback(fb, engine.model, engine.engineLabel(primary), fallbackStatus(primary, process.env));
+          sink.turnStart(); sink.text("```\n" + lines.join("\n") + "\n```"); sink.textEnd(); sink.turnEnd(true);
+          return;
+        }
         busy = true;
         try { await engine.send(String(m.text ?? "")); } finally {
           busy = false;
-          emit({ t: "usage", ...engine.stats(), model: engine.model, sessionId: engine.sessionId });
+          emit({ t: "usage", ...engine.stats(), model: engine.model, sessionId: engine.sessionId, fallback: engine.fallback.active });
         }
         break;
       }
       case "abort": engine.abort(); break;
       case "approve": pending.get(m.id)?.(!!m.allow); pending.delete(m.id); break;
       case "config": {
-        if (typeof m.model === "string" && m.model) engine.setModel(MODEL_ALIASES[m.model] ?? m.model);
-        else if (m.model === "") engine.setModel(engine.kind === "api" ? initialModel() : ""); // padrão = modelo/perfil salvo
+        if (typeof m.model === "string") engine.setModel(m.model ? MODEL_ALIASES[m.model] ?? m.model : ""); // vazio = modelo/perfil salvo
         if (m.effort !== undefined) engine.effort = isEffort(m.effort) ? m.effort : "";
         if (["manual", "auto", "plan", "bypass"].includes(m.mode)) perms.mode = m.mode as PermMode;
         ready();
