@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { recordStreamEvent } from "../src/agent/claude-cli.js";
+import path from "node:path";
+import { ClaudeSession, recordStreamEvent } from "../src/agent/claude-cli.js";
+import type { TurnSink } from "../src/agent/sink.js";
 import { MCP_PREFIX } from "../src/mcp/server.js";
 import { renderTranscript, shouldReflect } from "../src/skills/learn.js";
 import type { TurnRecord } from "../src/agent/loop.js";
@@ -59,5 +61,62 @@ test("turno do modo CLI com erro→conserto dispara a reflexão; turno curto e l
     recordStreamEvent(t, results({ type: "tool_result", tool_use_id: "b", content: "ok" }), new Set());
     assert.equal(shouldReflect(t, sb.ctx), true);
     assert.equal(shouldReflect({ ...fresh(), finished: true }, sb.ctx), false);
+  } finally { sb.cleanup(); }
+});
+
+const FIX = path.join(import.meta.dirname, "fixtures", "claude-cli");
+const FAKE = path.join(import.meta.dirname, "fake-claude.mjs");
+const silent = (): TurnSink => { const noop = () => {}; return { turnStart: noop, turnEnd: noop, text: noop, textEnd: noop, thinking: noop, toolStart: noop, toolEnd: noop, info: noop, warn: noop, error: noop }; };
+/** Sessão cujo `claude` é o falso, reproduzindo a fixture (ou um executável inexistente). */
+function fakeSession(root: string, fixture: string | null) {
+  const command = (args: string[]) => fixture === null ? { command: path.join(root, "claude-nao-existe"), args }
+    : { command: process.execPath, args: [FAKE, path.join(FIX, fixture + ".json"), ...args] };
+  return new ClaudeSession({ root, approvalSock: "x", stats: "", mcpCommand: { command: "x", args: [] }, sink: silent(), command });
+}
+
+test("send: falha estruturada vira lastFailure classificada", async () => {
+  const sb = sandbox();
+  try {
+    const s = fakeSession(sb.root, "invalid-api-key");
+    assert.equal(await s.send("oi"), false);
+    assert.deepEqual(s.lastFailure, { kind: "auth", message: "Invalid API key · Fix external API key" });
+    const q = fakeSession(sb.root, "usage-limit-hit");
+    assert.equal(await q.send("oi"), false);
+    assert.equal(q.lastFailure?.kind, "quota");
+  } finally { sb.cleanup(); }
+});
+
+test("send: claude não encontrado (spawn ENOENT) → auth", async () => {
+  const sb = sandbox();
+  try {
+    const s = fakeSession(sb.root, null);
+    assert.equal(await s.send("oi"), false);
+    assert.equal(s.lastFailure?.kind, "auth");
+    assert.match(s.lastFailure!.message, /ENOENT/);
+  } finally { sb.cleanup(); }
+});
+
+test("send: interrupção nunca vira falha", async () => {
+  const sb = sandbox();
+  try {
+    const s = fakeSession(sb.root, "interrupted");
+    const p = s.send("oi");
+    setTimeout(() => s.abort(), 300);
+    assert.equal(await p, true); // resolve(ok): interrupção não é erro
+    assert.equal(s.lastFailure, null);
+  } finally { sb.cleanup(); }
+});
+
+test("send: turno novo zera a falha anterior", async () => {
+  const sb = sandbox();
+  try {
+    const s = fakeSession(sb.root, "logged-out");
+    await s.send("oi");
+    assert.equal(s.lastFailure?.kind, "auth");
+    (s as any).o.command = (args: string[]) => ({ command: process.execPath, args: [FAKE, path.join(FIX, "interrupted.json"), ...args] });
+    const p = s.send("de novo");
+    setTimeout(() => s.abort(), 300);
+    await p;
+    assert.equal(s.lastFailure, null);
   } finally { sb.cleanup(); }
 });

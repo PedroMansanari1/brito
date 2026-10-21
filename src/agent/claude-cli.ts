@@ -13,6 +13,7 @@ import { subagentModel } from "../engine.js";
 import type { TurnRecord } from "./loop.js";
 import { claudeCommand } from "../util/platform.js";
 import { fmtBytes, findImages, splitOversize } from "../util/images.js";
+import { classifyClaudeCliFailure, collectClaudeFailure, shortError, type ClaudeCliFailure, type FailureKind } from "../provider/fallback.js";
 
 // Backend alternativo: delega ao `claude` oficial, que autentica com o /login do usuário.
 // O brito nunca lê nem envia o token da assinatura. Grafo, memória e skills chegam ao claude via MCP.
@@ -90,6 +91,8 @@ export interface ClaudeBackendOpts {
   sink?: TurnSink;
   /** variáveis extras para o claude (ex.: ELECTRON_RUN_AS_NODE no app desktop) */
   env?: Record<string, string>;
+  /** como subir o claude; padrão = `claudeCommand` (os testes trocam por um claude falso) */
+  command?: (args: string[]) => { command: string; args: string[] };
 }
 
 export class ClaudeSession {
@@ -109,6 +112,8 @@ export class ClaudeSession {
   /** transcript do último turno (thread principal), montado do stream-json para a reflexão de skills */
   lastTurn: TurnRecord | null = null;
   recentTurns: TurnRecord[] = [];
+  /** por que o último turno falhou (null = deu certo ou foi interrompido); o fallback para o qwen decide por ele */
+  lastFailure: { kind: FailureKind; message: string } | null = null;
   /** skills carregadas via skill_load (que roda no servidor MCP, outro processo) */
   readonly loadedSkills = new Set<string>();
   /** último turno em andamento, para o Ctrl+C */
@@ -163,13 +168,15 @@ export class ClaudeSession {
       if (imgs.length) ui.info(`🖼 ${imgs.map((i) => `${i.name} (${fmtBytes(i.bytes)})`).join(", ")} anexada${imgs.length > 1 ? "s" : ""}`);
       // O claude vê a imagem pela tool Read: o prompt diz quais arquivos são imagens anexadas pelo usuário.
       const prompt = imgs.length ? `${text}\n\n[O usuário anexou ${imgs.length > 1 ? "estas imagens" : "esta imagem"}; abra com a tool Read para vê-${imgs.length > 1 ? "las" : "la"}:\n${imgs.map((i) => `- ${i.path}`).join("\n")}]` : text;
-      const cmd = claudeCommand(this.args(prompt, [...new Set(imgs.map((i) => path.dirname(i.path)))]));
+      const cmd = (this.o.command ?? claudeCommand)(this.args(prompt, [...new Set(imgs.map((i) => path.dirname(i.path)))]));
       const child = (this.child = spawn(cmd.command, cmd.args, {
         cwd: this.o.root, stdio: ["ignore", "pipe", "pipe"],
         // `/reasoning none`: o claude desliga o raciocínio com MAX_THINKING_TOKENS=0 (não há `--effort none`)
         env: { ...process.env, ...this.o.env, BRITO_DEPTH: String(Number(process.env.BRITO_DEPTH ?? 0) + 1), ...(wireEffort(this.effort).thinking ? {} : { MAX_THINKING_TOKENS: "0" }) },
       }));
       let buf = "", stderr = "", ok = true, interrupted = false;
+      const failure: ClaudeCliFailure = { stderr: "", code: null };
+      this.lastFailure = null;
       const names = new Map<string, { name: string; input: unknown }>();
       const turn: TurnRecord = { messages: [{ role: "user", content: text }], toolCalls: 0, errors: 0, finished: false };
       this.lastTurn = turn;
@@ -177,6 +184,7 @@ export class ClaudeSession {
 
       const handle = (ev: any) => {
         recordStreamEvent(turn, ev, this.loadedSkills);
+        collectClaudeFailure(failure, ev);
         if (ev.type === "assistant") {
           for (const b of ev.message?.content ?? []) {
             if (b.type === "thinking" && b.thinking && !ev.parent_tool_use_id) ui.thinking(b.thinking);
@@ -215,7 +223,7 @@ export class ClaudeSession {
         }
       });
       child.stderr!.on("data", (d: Buffer) => { stderr += d.toString(); });
-      child.on("error", (e) => { ok = false; ui.error(`não consegui executar o claude: ${e.message}`); });
+      child.on("error", (e) => { ok = false; failure.spawnError = e.message; ui.error(`não consegui executar o claude: ${e.message}`); });
       child.on("close", (code, signal) => {
         this.child = null;
         interrupted = signal === "SIGINT" || code === 130 || this.aborted;
@@ -223,6 +231,11 @@ export class ClaudeSession {
         if (code !== 0 && !interrupted) { ok = false; if (stderr.trim()) ui.error(stderr.trim().slice(0, 600)); }
         else if (code === 0) this.started = true;
         turn.finished = ok && !interrupted && code === 0;
+        if (!ok && !interrupted) {
+          Object.assign(failure, { stderr, code });
+          const why = failure.spawnError ?? (failure.result || stderr.trim() || `claude saiu com código ${code}`);
+          this.lastFailure = { kind: classifyClaudeCliFailure(failure), message: shortError(why) };
+        }
         if (interrupted) ui.warn("⏹ interrompido");
         ui.turnEnd(ok && !interrupted);
         resolve(ok);
