@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
-import { ClaudeSession, recordStreamEvent } from "../src/agent/claude-cli.js";
+import { ClaudeSession, ORPHAN_RESULT, recordStreamEvent, turnsToMessages } from "../src/agent/claude-cli.js";
 import type { TurnSink } from "../src/agent/sink.js";
 import { MCP_PREFIX } from "../src/mcp/server.js";
 import { renderTranscript, shouldReflect } from "../src/skills/learn.js";
@@ -118,5 +118,68 @@ test("send: turno novo zera a falha anterior", async () => {
     setTimeout(() => s.abort(), 300);
     await p;
     assert.equal(s.lastFailure, null);
+  } finally { sb.cleanup(); }
+});
+
+/** Dois turnos montados do stream-json: o primeiro completo, o segundo caiu no meio de um tool_use. */
+function twoTurns(): TurnRecord[] {
+  const a = fresh(), b: TurnRecord = { messages: [{ role: "user", content: "agora rode os testes" }], toolCalls: 0, errors: 0, finished: false };
+  recordStreamEvent(a, assistant({ type: "text", text: "vou ler" }), new Set());
+  recordStreamEvent(a, assistant({ type: "tool_use", id: "r1", name: "Read", input: { file_path: "x.ts", limit: 10 } }), new Set());
+  recordStreamEvent(a, results({ type: "tool_result", tool_use_id: "r1", content: "conteúdo" }), new Set());
+  recordStreamEvent(a, assistant({ type: "tool_use", id: "g1", name: `${MCP_PREFIX}graph_search`, input: { query: "X" } }), new Set());
+  recordStreamEvent(a, results({ type: "tool_result", tool_use_id: "g1", content: "achei" }), new Set());
+  recordStreamEvent(a, assistant({ type: "text", text: "feito" }), new Set());
+  a.finished = true;
+  recordStreamEvent(b, assistant({ type: "tool_use", id: "b1", name: "Bash", input: { command: "npm test" } }), new Set());
+  recordStreamEvent(b, assistant({ type: "tool_use", id: "b2", name: "Grep", input: { pattern: "x" } }), new Set());
+  recordStreamEvent(b, results({ type: "tool_result", tool_use_id: "b1", content: "ok" }), new Set());
+  return [a, b];
+}
+
+test("turnsToMessages: papéis alternam, nomes e parâmetros do Brito, órfão fechado", () => {
+  const msgs = turnsToMessages(twoTurns());
+  assert.deepEqual(msgs.map((m) => m.role), ["user", "assistant", "user", "assistant", "user", "assistant", "user", "assistant", "user"]);
+  const uses = msgs.flatMap((m) => (Array.isArray(m.content) ? m.content : [])).filter((b: any) => b.type === "tool_use") as any[];
+  assert.deepEqual(uses.map((u) => u.name), ["read_file", "graph_search", "bash", "grep"]);
+  assert.deepEqual(uses[0].input, { path: "x.ts", limit: 10 });
+  // assistant "feito" + user do turno 2 viram mensagens separadas; o user do turno 2 é texto puro
+  assert.deepEqual(msgs[6], { role: "user", content: [{ type: "text", text: "agora rode os testes" }] });
+  // b1 tem resultado; b2 (órfão) ganha tool_result de erro, antes dos resultados reais
+  const last = msgs.at(-1)!.content as any[];
+  assert.deepEqual(last.map((r) => [r.tool_use_id, !!r.is_error]), [["b2", true], ["b1", false]]);
+  assert.equal(last[0].content, ORPHAN_RESULT);
+});
+
+test("turnsToMessages: turno que caiu sem resposta junta com o pedido seguinte; órfão no fim ganha mensagem própria", () => {
+  const caiu: TurnRecord = { messages: [{ role: "user", content: "pedido 1" }], toolCalls: 0, errors: 0, finished: false };
+  const segue: TurnRecord = { messages: [{ role: "user", content: "pedido 2" }], toolCalls: 0, errors: 0, finished: false };
+  recordStreamEvent(segue, assistant({ type: "tool_use", id: "w1", name: "Write", input: { file_path: "a.ts", content: "x" } }), new Set());
+  const msgs = turnsToMessages([caiu, segue]);
+  assert.deepEqual(msgs, [
+    { role: "user", content: [{ type: "text", text: "pedido 1" }, { type: "text", text: "pedido 2" }] },
+    { role: "assistant", content: [{ type: "tool_use", id: "w1", name: "write_file", input: { path: "a.ts", content: "x" } }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "w1", content: ORPHAN_RESULT, is_error: true }] },
+  ]);
+});
+
+test("turnsToMessages não altera os TurnRecord (a reflexão segue com os nomes do claude)", () => {
+  const turns = twoTurns();
+  const before = JSON.stringify(turns);
+  turnsToMessages(turns);
+  assert.equal(JSON.stringify(turns), before);
+});
+
+test("allTurns guarda todos os turnos; recentTurns só 3; reset zera os dois", async () => {
+  const sb = sandbox();
+  try {
+    const s = fakeSession(sb.root, "logged-out");
+    for (let i = 0; i < 4; i++) await s.send(`pedido ${i}`);
+    assert.equal(s.allTurns.length, 4);
+    assert.equal(s.recentTurns.length, 3);
+    assert.equal(s.allTurns[0].messages[0].content, "pedido 0");
+    s.reset();
+    assert.equal(s.allTurns.length, 0);
+    assert.equal(s.recentTurns.length, 0);
   } finally { sb.cleanup(); }
 });

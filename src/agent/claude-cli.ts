@@ -11,6 +11,7 @@ import { MODE_ENV, perms, type PermMode } from "../permissions.js";
 import { DEFAULT_MODEL, wireEffort } from "../model.js";
 import { subagentModel } from "../engine.js";
 import type { TurnRecord } from "./loop.js";
+import type { Msg } from "../provider/types.js";
 import { claudeCommand } from "../util/platform.js";
 import { fmtBytes, findImages, splitOversize } from "../util/images.js";
 import { classifyClaudeCliFailure, collectClaudeFailure, shortError, type ClaudeCliFailure, type FailureKind } from "../provider/fallback.js";
@@ -29,6 +30,52 @@ const resultText = (c: unknown): string => (typeof c === "string" ? c : Array.is
 /** Nome das tools do Brito → nome que o claude enxerga. */
 const CLAUDE_TOOL: Record<string, string> = { read_file: "Read", glob: "Glob", grep: "Grep", write_file: "Write", edit_file: "Edit", bash: "Bash" };
 const claudeToolName = (n: string) => CLAUDE_TOOL[n] ?? MCP_PREFIX + n;
+
+/** Nome nativo do claude → tool do Brito (inverso de CLAUDE_TOOL); os MCP já chegam sem o prefixo. */
+const BRITO_TOOL: Record<string, string> = Object.fromEntries(Object.entries(CLAUDE_TOOL).map(([b, c]) => [c, b]));
+
+export const ORPHAN_RESULT = "o modelo anterior caiu antes do resultado";
+
+type Block = Exclude<Msg["content"], string>[number];
+const blocks = (c: Msg["content"]): Block[] => (typeof c === "string" ? (c ? [{ type: "text", text: c }] : []) : [...c]);
+
+/** tool_use com o nome e os parâmetros do Brito (Read/Write/Edit usam `file_path`; o Brito usa `path`). */
+function britoToolUse(b: any): Block {
+  const name = BRITO_TOOL[b.name] ?? b.name;
+  let input = b.input;
+  if (name !== b.name && input && typeof input === "object" && "file_path" in input && !("path" in input)) {
+    const { file_path, ...rest } = input;
+    input = { path: file_path, ...rest };
+  }
+  return { ...b, name, input };
+}
+
+/**
+ * Histórico do claude CLI (todos os TurnRecord da sessão) → `Msg[]` válido para o loop próprio, na troca para o qwen.
+ * O stream-json manda um evento por bloco, então mensagens seguidas do mesmo papel viram uma; `tool_use` sem
+ * `tool_result` (o turno que caiu) ganha um resultado de erro. Não altera os TurnRecord (a reflexão ainda os usa).
+ */
+export function turnsToMessages(turns: TurnRecord[]): Msg[] {
+  const out: { role: Msg["role"]; content: Block[] }[] = [];
+  for (const m of turns.flatMap((t) => t.messages)) {
+    const content = blocks(m.content).map((b) => (b.type === "tool_use" ? britoToolUse(b) : b));
+    if (!content.length) continue;
+    const last = out.at(-1);
+    if (last?.role === m.role) last.content.push(...content);
+    else out.push({ role: m.role, content });
+  }
+  for (let i = 0; i < out.length; i++) {
+    if (out[i].role !== "assistant") continue;
+    const next = out[i + 1]?.role === "user" ? out[i + 1] : null;
+    const answered = new Set(next?.content.flatMap((b) => (b.type === "tool_result" ? [b.tool_use_id] : [])));
+    const missing: Block[] = out[i].content.flatMap((b) => (b.type === "tool_use" && !answered.has(b.id)
+      ? [{ type: "tool_result", tool_use_id: b.id, content: ORPHAN_RESULT, is_error: true } as Block] : []));
+    if (!missing.length) continue;
+    if (next) next.content.unshift(...missing);
+    else out.splice(i + 1, 0, { role: "user", content: missing });
+  }
+  return out;
+}
 
 /** Agentes do Brito viram subagentes do claude (--agents), no lugar do `delegate`. */
 function claudeAgents(): Record<string, unknown> {
@@ -112,6 +159,8 @@ export class ClaudeSession {
   /** transcript do último turno (thread principal), montado do stream-json para a reflexão de skills */
   lastTurn: TurnRecord | null = null;
   recentTurns: TurnRecord[] = [];
+  /** todos os turnos da sessão, sem corte: viram o histórico do qwen se o claude cair (`turnsToMessages`) */
+  allTurns: TurnRecord[] = [];
   /** por que o último turno falhou (null = deu certo ou foi interrompido); o fallback para o qwen decide por ele */
   lastFailure: { kind: FailureKind; message: string } | null = null;
   /** skills carregadas via skill_load (que roda no servidor MCP, outro processo) */
@@ -124,7 +173,7 @@ export class ClaudeSession {
   get sessionId() { return this.id; }
   /** Retoma uma conversa do claude (--resume) em vez de começar outra. */
   resume(id: string) { this.id = id; this.started = true; }
-  reset() { this.id = randomUUID(); this.started = false; this.contextTokens = 0; this.recentTurns = []; }
+  reset() { this.id = randomUUID(); this.started = false; this.contextTokens = 0; this.recentTurns = []; this.allTurns = []; }
   abort() { if (!this.child) return; this.aborted = true; this.child.kill("SIGINT"); }
   /** No Windows `kill("SIGINT")` termina o processo sem sinal nem código 130: lembramos que fomos nós que interrompemos. */
   private aborted = false;
@@ -181,6 +230,7 @@ export class ClaudeSession {
       const turn: TurnRecord = { messages: [{ role: "user", content: text }], toolCalls: 0, errors: 0, finished: false };
       this.lastTurn = turn;
       this.recentTurns = [...this.recentTurns, turn].slice(-3);
+      this.allTurns.push(turn);
 
       const handle = (ev: any) => {
         recordStreamEvent(turn, ev, this.loadedSkills);
