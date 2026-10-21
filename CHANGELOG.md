@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Automatic fallback to Qwen.** When Claude (API or `claude` CLI) fails on account/capacity (subscription limit, rate limit, credit, auth, overload, network), Brito warns and redoes the request on the `qwen` profile with the conversation so far. Once per session; `/model <claude>` goes back. Never on Ctrl+C or content errors.
+- Without `ANTHROPIC_API_KEY` and without the `claude` CLI, Brito (terminal and desktop) opens on Qwen when the fallback is ready; otherwise the startup error says why the fallback is unavailable.
+- `/fallback` shows the main model, the fallback and its state (terminal; in the desktop app, send it as a message). The desktop status bar shows Qwen while the fallback is active.
+- In API mode, `/model <claude>` without `ANTHROPIC_API_KEY` is refused with a hint instead of failing on the next turn.
+
 ## 0.7.0-qwen.0 — 2026-10-20 (fork)
 
 ### Added
