@@ -4,6 +4,31 @@ import { resolveModel } from "./provider/resolve.js";
 
 export type Engine = { kind: "api" } | { kind: "claude" } | { kind: "error"; message: string };
 
+/** O fallback é sempre este perfil de `providers` (não configurável). */
+export const FALLBACK_PROFILE = "qwen";
+
+export type FallbackStatus =
+  | { ready: true; name: typeof FALLBACK_PROFILE; label: string }
+  | { ready: false; reason: string; label?: string };
+
+/**
+ * Pronto só se o perfil existe, é válido, tem a chave no ambiente e o principal não é ele mesmo. Relê o config a
+ * cada chamada, como os perfis.
+ */
+export function fallbackStatus(primary: string, env: NodeJS.ProcessEnv): FallbackStatus {
+  const { profiles, errors, rejected } = loadProfiles();
+  const p = profiles[FALLBACK_PROFILE];
+  const label = p?.label;
+  if (primary.trim().toLowerCase() === FALLBACK_PROFILE) return { ready: false, reason: "o modelo principal já é o qwen", label };
+  if (rejected.includes(FALLBACK_PROFILE)) {
+    const why = errors.find((e) => e.toLowerCase().includes(`"${FALLBACK_PROFILE}"`)) ?? "";
+    return { ready: false, reason: `o perfil "${FALLBACK_PROFILE}" em ~/.brito/config.json está inválido (${why})` };
+  }
+  if (!p) return { ready: false, reason: `sem perfil "${FALLBACK_PROFILE}" em providers no ~/.brito/config.json` };
+  if (!env[p.apiKeyEnv]?.trim()) return { ready: false, reason: missingKeyMessage(p), label };
+  return { ready: true, name: FALLBACK_PROFILE, label: p.label };
+}
+
 /** Modelo padrão do subagente `explore` no Claude: rápido e barato. */
 export const EXPLORE_DEFAULT = MODEL_ALIASES.haiku;
 

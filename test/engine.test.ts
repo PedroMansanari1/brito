@@ -1,9 +1,9 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { learnerModel, pickEngine, subagentModel } from "../src/engine.js";
+import { fallbackStatus, learnerModel, pickEngine, subagentModel } from "../src/engine.js";
 
 before(() => {
   process.env.BRITO_CONFIG = join(mkdtempSync(join(tmpdir(), "brito-")), "c.json");
@@ -52,4 +52,53 @@ test("BRITO_LEARN_MODEL não leva o aprendizado à Anthropic com perfil ativo", 
   assert.equal(learnerModel("sonnet", { BRITO_LEARN_MODEL: "haiku" }), "haiku");
   assert.equal(learnerModel("qwen", {}), "qwen");
   assert.equal(learnerModel("sonnet", {}), "sonnet");
+});
+
+/** Roda `fn` com outro config e devolve o original. */
+function withConfig(cfg: unknown, fn: () => void) {
+  const orig = readFileSync(process.env.BRITO_CONFIG!, "utf8");
+  writeFileSync(process.env.BRITO_CONFIG!, JSON.stringify(cfg));
+  try { fn(); } finally { writeFileSync(process.env.BRITO_CONFIG!, orig); }
+}
+
+test("fallbackStatus: pronto com perfil válido e chave", () => {
+  assert.deepEqual(fallbackStatus("sonnet", { BRITO_TESTE_KEY: "k" }), { ready: true, name: "qwen", label: "qwen" });
+  withConfig({ providers: { qwen: { type: "openai", label: "Qwen 27B (OCI)", baseURL: "https://x/v1", model: "m", apiKeyEnv: "K" } } }, () => {
+    assert.deepEqual(fallbackStatus("claude-opus-5-5", { K: "k" }), { ready: true, name: "qwen", label: "Qwen 27B (OCI)" });
+  });
+});
+
+test("fallbackStatus: sem chave → motivo nomeia a variável", () => {
+  for (const env of [{}, { BRITO_TESTE_KEY: " " }]) {
+    const s = fallbackStatus("sonnet", env);
+    assert.equal(s.ready, false);
+    assert.match((s as { reason: string }).reason, /BRITO_TESTE_KEY/);
+    assert.equal(s.label, "qwen");
+  }
+});
+
+test("fallbackStatus: sem perfil qwen", () => {
+  withConfig({ providers: {} }, () => {
+    const s = fallbackStatus("sonnet", { BRITO_TESTE_KEY: "k" });
+    assert.equal(s.ready, false);
+    assert.match((s as { reason: string }).reason, /sem perfil "qwen"/);
+    assert.equal(s.label, undefined);
+  });
+});
+
+test("fallbackStatus: perfil qwen inválido traz o motivo", () => {
+  withConfig({ providers: { qwen: { type: "openai", baseURL: "https://x/v1", model: "m" } } }, () => {
+    const s = fallbackStatus("sonnet", { BRITO_TESTE_KEY: "k" });
+    assert.equal(s.ready, false);
+    assert.match((s as { reason: string }).reason, /inválido.*apiKeyEnv/);
+  });
+});
+
+test("fallbackStatus: principal já é o qwen (sem diferenciar maiúsculas)", () => {
+  for (const m of ["qwen", "QWEN", " Qwen "]) {
+    const s = fallbackStatus(m, { BRITO_TESTE_KEY: "k" });
+    assert.equal(s.ready, false);
+    assert.match((s as { reason: string }).reason, /já é o qwen/);
+    assert.equal(s.label, "qwen");
+  }
 });
