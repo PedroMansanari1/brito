@@ -7,6 +7,7 @@ import { MCP_PREFIX } from "../src/mcp/server.js";
 import { renderTranscript, shouldReflect } from "../src/skills/learn.js";
 import type { TurnRecord } from "../src/agent/loop.js";
 import { sandbox } from "./helpers.js";
+import { switchableBackend, type ReplBackend } from "../src/repl.js";
 
 const fresh = (): TurnRecord => ({ messages: [{ role: "user", content: "faça X" }], toolCalls: 0, errors: 0, finished: false });
 const assistant = (...content: any[]) => ({ type: "assistant", message: { content } });
@@ -182,4 +183,37 @@ test("allTurns guarda todos os turnos; recentTurns só 3; reset zera os dois", a
     assert.equal(s.allTurns.length, 0);
     assert.equal(s.recentTurns.length, 0);
   } finally { sb.cleanup(); }
+});
+
+/** Backend falso: só o que o proxy usa. */
+function fakeBackend(model: string, usage: { input: number; output: number; cacheRead?: number }, cost: number | undefined, commands: string[], ran: string[]): ReplBackend {
+  return {
+    model: () => model, contextTokens: () => 0, usage: () => usage, ctxWindow: 1000, cost: () => cost,
+    turn: async () => { ran.push(`turn:${model}`); return true; }, reset: () => {}, close: async () => { ran.push(`close:${model}`); },
+    commands: Object.fromEntries(commands.map((n) => [n, { desc: `${n} (${model})`, run: async () => { ran.push(`${n}:${model}`); } }])),
+  };
+}
+
+test("switchableBackend: swap soma usage/custo dos motores e mantém os comandos estáveis", async () => {
+  const ran: string[] = [];
+  const cli = fakeBackend("claude", { input: 100, output: 10, cacheRead: 50 }, 0.25, ["/model", "/effort", "/context"], ran);
+  const qwen = fakeBackend("qwen", { input: 40, output: 4 }, undefined, ["/model", "/context", "/reasoning"], ran);
+  const b = switchableBackend(cli);
+  const menu = b.commands;
+  assert.deepEqual(Object.keys(menu), ["/model", "/effort", "/context"]);
+  b.swap(qwen);
+  assert.equal(b.commands, menu); // o REPL guardou o objeto: continua o mesmo
+  assert.equal(b.model(), "qwen");
+  assert.deepEqual(b.usage(), { input: 140, output: 14, cacheRead: 50 });
+  assert.equal(b.cost?.(), 0.25); // o custo do claude para de somar, mas não some
+  await b.turn("oi", new AbortController().signal);
+  await b.commands["/model"].run([]);
+  await b.commands["/reasoning"].run([]); // comando novo do motor atual entra no mapa
+  await b.commands["/effort"].run([]); // o qwen não tem: avisa, não quebra
+  assert.deepEqual(ran, ["turn:qwen", "/model:qwen", "/reasoning:qwen"]);
+  // voltar ao motor anterior não conta o uso dele duas vezes
+  b.swap(cli);
+  assert.deepEqual(b.usage(), { input: 140, output: 14, cacheRead: 50 });
+  await b.close();
+  assert.deepEqual(ran.at(-1), "close:claude");
 });
