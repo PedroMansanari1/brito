@@ -30,6 +30,7 @@ import { defaultComplete, recordOutcomes, reflect, shouldReflect, type Complete 
 import { expireTrials, skillsMode } from "./skills/trial.js";
 import { claudeCliComplete } from "./skills/learn-cli.js";
 import type { TurnRecord } from "./agent/loop.js";
+import type { Msg } from "./provider/types.js";
 import { buildSystemPrompt, graphStatsLine } from "./agent/prompt.js";
 import { allTools } from "./tools/registry.js";
 import { ui, c, fmtTokens } from "./ui/ui.js";
@@ -336,6 +337,93 @@ function makeLearner(getTurns: () => TurnRecord[], ctx: ToolContext, complete: C
   };
 }
 
+/** Como montar o modo API no meio da sessão (troca claude CLI → qwen); na abertura normal tudo fica no padrão. */
+interface ApiBackendOpts {
+  /** estado do fallback da sessão (o da troca já vem ativo); padrão = novo, com `model` como principal */
+  fallback?: FallbackState;
+  /** motor do principal no `/fallback`; padrão = API Anthropic ou endpoint, pelo nome */
+  engineLabel?: (model: string) => string;
+  /** esforço herdado (`/effort` do claude CLI); vazio = o do config */
+  effort?: string;
+  /** skills já carregadas na sessão (contam para a reflexão do turno) */
+  loadedSkills?: Set<string>;
+  /** histórico inicial do agente (conversa herdada do claude CLI) */
+  messages?: Msg[];
+  /** grafo já aberto; padrão = abre `root` */
+  graph?: GraphStore;
+}
+
+/**
+ * Monta o loop próprio (`Agent`) e o `ReplBackend` do modo API. Serve à abertura normal e à troca para o qwen quando
+ * o claude CLI cai; `perms.mode` é global, então o modo de permissão da sessão segue igual.
+ */
+async function buildApiBackend(root: string, model: string, io: { ask: (q: string, opts?: { force?: boolean }) => Promise<boolean> }, o: ApiBackendOpts = {}) {
+  const graph = o.graph ?? await GraphStore.open(root);
+  // A contagem do prompt acompanha cada sincronização: sem isso o modelo veria "0 símbolos" a sessão inteira
+  // em projeto que começou vazio e nasceu código depois.
+  let symCount = 0;
+  const sync = async () => { symCount = (await indexProject(root, graph)).symbols; };
+  ui.info("sincronizando grafo…");
+  await sync(); // incremental: barato quando nada mudou
+  const [{ n: notes }] = await graph.run("MATCH (s:Note) RETURN count(s) AS n");
+  const noteCount = Number(notes);
+
+  const ctx: ToolContext = { root, graph, ask: (q, opts) => io.ask(q, opts), sync, dirty: false, loadedSkills: o.loadedSkills ?? new Set() };
+  const fallback = o.fallback ?? newFallbackState(model);
+  // Função: o índice de skills e a contagem do grafo são relidos a cada passo e refletem o que mudou na sessão.
+  const agent = new Agent(() => buildSystemPrompt(root, graphStatsLine(symCount, noteCount, "now"), skillsIndex(root)) + (perms.mode === "plan" ? PLAN_NOTE : ""), ctx, { model, fallback });
+  if (o.messages) agent.messages = o.messages;
+  if (o.effort) agent.effort = o.effort as Effort;
+  ctx.model = () => agent.model; // subagentes seguem o modelo vivo
+  ui.reasoning = loadReasoningDisplay();
+  const learnModel = () => learnerModel(agent.model, process.env);
+  loadProjectAgents(root);
+
+  /** Depois de tarefas complexas (ou uso de skill), propõe criar/melhorar skills. */
+  const learn = makeLearner(() => agent.recentTurns, ctx, defaultComplete, learnModel);
+
+  const turn = async (text: string, signal: AbortSignal) => {
+    ui.turnStart();
+    let ok = true;
+    try { await agent.send(text, signal); }
+    catch (e: any) { ok = false; signal.aborted ? ui.warn("⏹ interrompido") : ui.error(e?.message ?? String(e)); }
+    finally { ui.turnEnd(ok); }
+    return ok;
+  };
+
+  const modelCmd = modelCommand(() => agent.model, (m) => { agent.model = m; chooseModel(fallback, m); }, "(troque com /model; subagentes explore usam BRITO_EXPLORE_MODEL)");
+  const backend: ReplBackend = {
+    model: () => agent.model,
+    contextTokens: () => agent.contextTokens,
+    usage: () => agent.usage,
+    get ctxWindow() { return contextWindowFor(agent.model); },
+    cost: () => (Number.isFinite(PRICE_IN) && Number.isFinite(PRICE_OUT) ? (agent.usage.input * PRICE_IN + agent.usage.output * PRICE_OUT) / 1e6 : undefined),
+    turn,
+    afterTurn: async () => { modelCmd.restoreOnce(fallback.active); await learn(); },
+    reset: () => { agent.messages = []; agent.contextTokens = 0; agent.recentTurns = []; agent.lastTurn = null; },
+    onShell: () => { ctx.dirty = true; }, // `!cmd` pode ter mudado o código
+    commands: {
+      "/model": modelCmd.cmd,
+      "/fallback": fallbackCommand(fallback, () => agent.model, o.engineLabel ?? ((m) => (resolveModel(m).kind === "openai" ? "endpoint" : "API Anthropic"))),
+      "/reasoning": reasoningCommand(() => agent.effort, (e) => { agent.effort = e; }),
+      "/tools": { desc: "ferramentas disponíveis", run: async () => { for (const t of allTools()) ui.print(`  ${ui.toolLabel(t.name)}${c.dim(t.dangerous ? "  (pede aprovação)" : "")}`); } },
+      "/context": {
+        desc: "uso da janela de contexto",
+        run: async () => {
+          const win = contextWindowFor(agent.model);
+          const pct = Math.round((agent.contextTokens / win) * 100);
+          ui.print(`  ${c.soft(`${fmtTokens(agent.contextTokens)} / ${fmtTokens(win)}`)} ${c.muted(`(${pct}%) · ${agent.messages.length} mensagens · compacta em ~${fmtTokens(compactAtFor(agent.model))}`)}`);
+        },
+      },
+      "/index": { desc: "reconstrói o grafo do zero", run: async () => { ui.info("reconstruindo grafo…"); ui.print(c.muted(JSON.stringify(await indexProject(root, graph, { full: true })))); } },
+      "/learn": { desc: "extrai skills do último turno agora", run: async () => { await learn(true); } },
+      "/skills": skillsCommand(root, io, { complete: defaultComplete, model: learnModel }),
+    },
+    close: async () => { await graph.close(); },
+  };
+  return { backend, agent, learn, symbols: () => symCount, notes: noteCount };
+}
+
 async function runViaClaude(root: string, promptParts: string[], yes: boolean, model?: string) {
   const startedAt = Date.now();
   if (yes) perms.mode = "bypass";
@@ -436,80 +524,22 @@ program
     const root = rootOf(o);
     const startedAt = Date.now();
     { const { offerNoteMigration } = await import("./graph/migrate.js"); await offerNoteMigration(root, (q) => migrationAsk(q), (m) => ui.info(m)); }
-    const graph = await GraphStore.open(root);
-    // A contagem do prompt acompanha cada sincronização: sem isso o modelo veria "0 símbolos" a sessão inteira
-    // em projeto que começou vazio e nasceu código depois.
-    let symCount = 0, noteCount = 0;
-    const sync = async () => { symCount = (await indexProject(root, graph)).symbols; };
-    ui.info("sincronizando grafo…");
-    await sync(); // incremental: barato quando nada mudou
-    const [{ n: notes }] = await graph.run("MATCH (s:Note) RETURN count(s) AS n");
-    noteCount = Number(notes);
 
     // `io.ask` é substituída pelo REPL (dock); em prompt único cai na pergunta simples.
     if (o.yes) perms.mode = "bypass";
     const io = { ask: async (q: string, _opts?: { force?: boolean }) => perms.mode === "bypass" || plainAsk(q) };
-    const ctx: ToolContext = { root, graph, ask: (q, opts) => io.ask(q, opts), sync, dirty: false, loadedSkills: new Set() };
-    const fallback = newFallbackState(startModel);
-    // Função: o índice de skills e a contagem do grafo são relidos a cada passo e refletem o que mudou na sessão.
-    const agent = new Agent(() => buildSystemPrompt(root, graphStatsLine(symCount, noteCount, "now"), skillsIndex(root)) + (perms.mode === "plan" ? PLAN_NOTE : ""), ctx, { model: startModel, fallback });
-    ctx.model = () => agent.model; // subagentes seguem o modelo vivo
-    ui.reasoning = loadReasoningDisplay();
-    const learnModel = () => learnerModel(agent.model, process.env);
-    loadProjectAgents(root);
-
-    /** Depois de tarefas complexas (ou uso de skill), propõe criar/melhorar skills. */
-    const learn = makeLearner(() => agent.recentTurns, ctx, defaultComplete, learnModel);
-
-    const turn = async (text: string, signal: AbortSignal) => {
-      ui.turnStart();
-      let ok = true;
-      try { await agent.send(text, signal); }
-      catch (e: any) { ok = false; signal.aborted ? ui.warn("⏹ interrompido") : ui.error(e?.message ?? String(e)); }
-      finally { ui.turnEnd(ok); }
-      return ok;
-    };
+    const api = await buildApiBackend(root, startModel, io);
 
     if (promptParts.length) {
-      if (await turn(promptParts.join(" "), new AbortController().signal)) await learn();
-      await graph.close();
+      if (await api.backend.turn(promptParts.join(" "), new AbortController().signal)) await api.learn();
+      await api.backend.close();
       return;
     }
 
-    const modelCmd = modelCommand(() => agent.model, (m) => { agent.model = m; chooseModel(fallback, m); }, "(troque com /model; subagentes explore usam BRITO_EXPLORE_MODEL)");
-    const backend: ReplBackend = {
-      model: () => agent.model,
-      contextTokens: () => agent.contextTokens,
-      usage: () => agent.usage,
-      get ctxWindow() { return contextWindowFor(agent.model); },
-      cost: () => (Number.isFinite(PRICE_IN) && Number.isFinite(PRICE_OUT) ? (agent.usage.input * PRICE_IN + agent.usage.output * PRICE_OUT) / 1e6 : undefined),
-      turn,
-      afterTurn: async () => { modelCmd.restoreOnce(fallback.active); await learn(); },
-      reset: () => { agent.messages = []; agent.contextTokens = 0; agent.recentTurns = []; agent.lastTurn = null; },
-      onShell: () => { ctx.dirty = true; }, // `!cmd` pode ter mudado o código
-      commands: {
-        "/model": modelCmd.cmd,
-        "/fallback": fallbackCommand(fallback, () => agent.model, (m) => (resolveModel(m).kind === "openai" ? "endpoint" : "API Anthropic")),
-        "/reasoning": reasoningCommand(() => agent.effort, (e) => { agent.effort = e; }),
-        "/tools": { desc: "ferramentas disponíveis", run: async () => { for (const t of allTools()) ui.print(`  ${ui.toolLabel(t.name)}${c.dim(t.dangerous ? "  (pede aprovação)" : "")}`); } },
-        "/context": {
-          desc: "uso da janela de contexto",
-          run: async () => {
-            const win = contextWindowFor(agent.model);
-            const pct = Math.round((agent.contextTokens / win) * 100);
-            ui.print(`  ${c.soft(`${fmtTokens(agent.contextTokens)} / ${fmtTokens(win)}`)} ${c.muted(`(${pct}%) · ${agent.messages.length} mensagens · compacta em ~${fmtTokens(compactAtFor(agent.model))}`)}`);
-          },
-        },
-        "/index": { desc: "reconstrói o grafo do zero", run: async () => { ui.info("reconstruindo grafo…"); ui.print(c.muted(JSON.stringify(await indexProject(root, graph, { full: true })))); } },
-        "/learn": { desc: "extrai skills do último turno agora", run: async () => { await learn(true); } },
-        "/skills": skillsCommand(root, io, { complete: defaultComplete, model: learnModel }),
-      },
-      close: async () => { await graph.close(); },
-    };
-    await runRepl(backend, {
+    await runRepl(api.backend, {
       root, yes: !!o.yes, startedAt, io,
       banner: {
-        dir: root, symbols: symCount, notes: noteCount, tools: allTools().map((t) => t.name),
+        dir: root, symbols: api.symbols(), notes: api.notes, tools: allTools().map((t) => t.name),
         skills: skillInfo(root), agents: listAgents().map((a) => a.name),
       },
     });
