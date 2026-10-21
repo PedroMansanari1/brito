@@ -18,6 +18,7 @@ import { Agent } from "./agent/loop.js";
 import { EFFORTS, MODEL_ALIASES, modelHelp, effortLabel, initialEffort, initialModel, loadProfiles, isEffort, loadReasoningDisplay, parseModelArgs, saveEffort, saveModel, saveReasoningDisplay, type Effort, type ModelScope } from "./model.js";
 import { hasClaudeCli, ClaudeSession } from "./agent/claude-cli.js";
 import { learnerModel, pickEngine } from "./engine.js";
+import { chooseModel, newFallbackState } from "./provider/fallback.js";
 import { compactAtFor, contextWindowFor, resolveModel } from "./provider/resolve.js";
 import { startApprovalServer } from "./agent/approval.js";
 import { serveMcp } from "./mcp/server.js";
@@ -357,7 +358,8 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean, m
   }
 
   // Perfis de endpoint rodam no loop próprio do Brito, não dentro do claude: aqui o /model só avisa como reabrir.
-  const modelCmd = modelCommand(() => session.requestedModel || session.model, (m) => { session.requestedModel = m; session.model = m; }, "(assinatura do claude CLI)",
+  const fallback = newFallbackState(session.requestedModel || session.model);
+  const modelCmd = modelCommand(() => session.requestedModel || session.model, (m) => { session.requestedModel = m; session.model = m; chooseModel(fallback, m); }, "(assinatura do claude CLI)",
     (m) => { const r = resolveModel(m); return r.kind === "openai" ? `o ${r.label} roda no modo API: reabra com \`brito --model ${r.name}\`` : null; });
   session.effort = initialEffort();
   ui.reasoning = loadReasoningDisplay();
@@ -460,7 +462,8 @@ program
       return;
     }
 
-    const modelCmd = modelCommand(() => agent.model, (m) => { agent.model = m; }, "(troque com /model; subagentes explore usam BRITO_EXPLORE_MODEL)");
+    const fallback = newFallbackState(agent.model);
+    const modelCmd = modelCommand(() => agent.model, (m) => { agent.model = m; chooseModel(fallback, m); }, "(troque com /model; subagentes explore usam BRITO_EXPLORE_MODEL)");
     const backend: ReplBackend = {
       model: () => agent.model,
       contextTokens: () => agent.contextTokens,
