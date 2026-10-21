@@ -176,6 +176,8 @@ O Brito **não tem drivers de banco e não se conecta a nada sozinho**. Quando p
 
 ## Endpoint compatível com OpenAI (ex.: Qwen no OCI)
 
+> Passo a passo completo (instalação, chave, perfil e como dar acesso ao repositório): [docs/GUIA-QWEN.md](docs/GUIA-QWEN.md).
+
 Além do Claude, o Brito roda com qualquer modelo servido pela API **Chat Completions** da OpenAI (vLLM, OCI Generative AI, LiteLLM, Ollama…) com chamada de ferramentas. Cadastre um perfil em `~/.brito/config.json`:
 
 ```json
