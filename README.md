@@ -180,6 +180,8 @@ Brito has **no database drivers and connects to nothing on its own**. When it ne
 
 ## OpenAI-compatible endpoint (e.g. Qwen on OCI)
 
+> Full step-by-step (install, key, profile, and how to give people access to the repository, in Portuguese): [docs/GUIA-QWEN.md](docs/GUIA-QWEN.md).
+
 Besides Claude, Brito runs on any model served through the OpenAI **Chat Completions** API (vLLM, OCI Generative AI, LiteLLM, Ollama…) with tool calling. Add a profile to `~/.brito/config.json`:
 
 ```json
