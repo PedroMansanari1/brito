@@ -49,6 +49,23 @@ export function pickEngine(model: string, env: NodeJS.ProcessEnv, hasCli: () => 
   return { kind: "error", message: "Defina ANTHROPIC_API_KEY ou instale o Claude Code e rode `claude` → /login." };
 }
 
+/** Motivo do fallback quando a sessão já abre no qwen. */
+export const NO_ANTHROPIC = "sem conta da Anthropic";
+
+export type Opening = Engine | { kind: "fallback"; label: string };
+
+/**
+ * Motor da abertura: o de `pickEngine`, salvo quando um Claude não tem conta (sem ANTHROPIC_API_KEY e sem o `claude`)
+ * e o fallback está pronto — aí abre direto no qwen. Sem fallback pronto, o erro de sempre leva o motivo dele.
+ * Perfil inválido nunca vira fallback: continua o erro de perfil.
+ */
+export function openEngine(model: string, env: NodeJS.ProcessEnv, hasCli: () => boolean): Opening {
+  const e = pickEngine(model, env, hasCli);
+  if (e.kind !== "error" || resolveModel(model).kind !== "anthropic" || loadProfiles().rejected.includes(model.trim().toLowerCase())) return e;
+  const s = fallbackStatus(model, env);
+  return s.ready ? { kind: "fallback", label: s.label } : { kind: "error", message: `${e.message}\nFallback (qwen) indisponível: ${s.reason}.` };
+}
+
 /**
  * Modelo de um subagente. BRITO_EXPLORE_MODEL manda no `explore`. Com o agente principal num endpoint, subagente
  * que pediria um Claude fica no modelo do principal (senão a conta da Anthropic voltaria a ser usada em silêncio).

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fallbackStatus, learnerModel, pickEngine, subagentModel } from "../src/engine.js";
+import { fallbackStatus, learnerModel, openEngine, pickEngine, subagentModel } from "../src/engine.js";
 
 before(() => {
   process.env.BRITO_CONFIG = join(mkdtempSync(join(tmpdir(), "brito-")), "c.json");
@@ -101,4 +101,37 @@ test("fallbackStatus: principal já é o qwen (sem diferenciar maiúsculas)", ()
     assert.match((s as { reason: string }).reason, /já é o qwen/);
     assert.equal(s.label, "qwen");
   }
+});
+
+test("openEngine: Claude sem conta e fallback pronto → abre no qwen", () => {
+  assert.deepEqual(openEngine("sonnet", { BRITO_TESTE_KEY: "k" }, () => false), { kind: "fallback", label: "qwen" });
+});
+
+test("openEngine: com conta da Anthropic segue o pickEngine", () => {
+  assert.deepEqual(openEngine("sonnet", { ANTHROPIC_API_KEY: "x", BRITO_TESTE_KEY: "k" }, nuncaChamar), { kind: "api" });
+  assert.deepEqual(openEngine("sonnet", { BRITO_TESTE_KEY: "k" }, () => true), { kind: "claude" });
+  assert.deepEqual(openEngine("qwen", { BRITO_TESTE_KEY: "k" }, nuncaChamar), { kind: "api" });
+});
+
+test("openEngine: sem fallback pronto → erro de sempre + motivo do fallback", () => {
+  const e = openEngine("sonnet", {}, () => false);
+  assert.equal(e.kind, "error");
+  assert.match((e as { message: string }).message, /Defina ANTHROPIC_API_KEY[\s\S]*Fallback \(qwen\) indisponível:.*BRITO_TESTE_KEY/);
+});
+
+test("openEngine: perfil qwen inválido nunca vira fallback silencioso", () => {
+  withConfig({ providers: { qwen: { type: "openai", baseURL: "https://x/v1", model: "m" } } }, () => {
+    const e = openEngine("sonnet", { BRITO_TESTE_KEY: "k" }, () => false);
+    assert.equal(e.kind, "error");
+    assert.match((e as { message: string }).message, /inválido/);
+    const q = openEngine("qwen", { BRITO_TESTE_KEY: "k" }, () => false);
+    assert.equal(q.kind, "error");
+    assert.match((q as { message: string }).message, /"qwen".*inválido/);
+  });
+});
+
+test("openEngine: perfil escolhido sem chave não cai em fallback", () => {
+  const e = openEngine("qwen", {}, () => false);
+  assert.equal(e.kind, "error");
+  assert.doesNotMatch((e as { message: string }).message, /Fallback/);
 });

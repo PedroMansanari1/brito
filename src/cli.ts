@@ -12,12 +12,12 @@ import os from "node:os";
 import fs from "node:fs";
 import { PLAN_NOTE, perms, describeClaudeTool } from "./permissions.js";
 import { loadProjectAgents, listAgents } from "./agent/agents.js";
-import { GraphLockedError, GraphStore } from "./graph/store.js";
+import { GraphLockedError, GraphStore, openGraphAfterClaude } from "./graph/store.js";
 import { indexProject } from "./graph/indexer.js";
 import { Agent } from "./agent/loop.js";
 import { EFFORTS, MODEL_ALIASES, modelHelp, effortLabel, initialEffort, initialModel, loadProfiles, isEffort, loadReasoningDisplay, parseModelArgs, saveEffort, saveModel, saveReasoningDisplay, type Effort, type ModelScope } from "./model.js";
 import { hasClaudeCli, historyForFallback, ClaudeSession } from "./agent/claude-cli.js";
-import { fallbackStatus, learnerModel, pickEngine } from "./engine.js";
+import { FALLBACK_PROFILE, NO_ANTHROPIC, fallbackStatus, learnerModel, openEngine } from "./engine.js";
 import { activateFallback, chooseModel, cliShouldFallBack, fallbackWarning, newFallbackState, onceRestore, renderFallback, retryPrompt, type FallbackState } from "./provider/fallback.js";
 import { compactAtFor, contextWindowFor, resolveModel } from "./provider/resolve.js";
 import { startApprovalServer } from "./agent/approval.js";
@@ -337,19 +337,6 @@ function makeLearner(getTurns: () => TurnRecord[], ctx: ToolContext, complete: C
   };
 }
 
-/**
- * Abre o grafo no processo do REPL depois de um turno do claude: o servidor MCP dele solta o lock ao morrer, mas pode
- * levar um instante além do `close` do filho. Uma tentativa extra curta cobre isso.
- */
-async function openGraphAfterClaude(root: string): Promise<GraphStore> {
-  try { return await GraphStore.open(root); }
-  catch (e) {
-    if (!(e instanceof GraphLockedError)) throw e;
-    await new Promise((r) => setTimeout(r, 500));
-    return GraphStore.open(root);
-  }
-}
-
 /** Como montar o modo API no meio da sessão (troca claude CLI → qwen); na abertura normal tudo fica no padrão. */
 interface ApiBackendOpts {
   /** estado do fallback da sessão (o da troca já vem ativo); padrão = novo, com `model` como principal */
@@ -404,7 +391,11 @@ async function buildApiBackend(root: string, model: string, io: { ask: (q: strin
     return ok;
   };
 
-  const modelCmd = modelCommand(() => agent.model, (m) => { agent.model = m; chooseModel(fallback, m); }, "(troque com /model; subagentes explore usam BRITO_EXPLORE_MODEL)");
+  // Sem ANTHROPIC_API_KEY o Claude não roda neste loop (sessão aberta no qwen): melhor recusar do que falhar no turno.
+  const noApiKey = (m: string) => (resolveModel(m).kind === "anthropic" && !process.env.ANTHROPIC_API_KEY?.trim()
+    ? `o ${m} precisa de ANTHROPIC_API_KEY neste modo; sem ela, reabra com \`brito --model ${m}\` para usar o claude CLI`
+    : null);
+  const modelCmd = modelCommand(() => agent.model, (m) => { agent.model = m; chooseModel(fallback, m); }, "(troque com /model; subagentes explore usam BRITO_EXPLORE_MODEL)", noApiKey);
   const backend: ReplBackend = {
     model: () => agent.model,
     contextTokens: () => agent.contextTokens,
@@ -591,7 +582,7 @@ program
     if (Number(process.env.BRITO_DEPTH ?? 0) >= 2) { console.error("brito aninhado demais (BRITO_DEPTH): abortando para evitar laço de processos."); process.exit(1); }
     for (const e of loadProfiles().errors) ui.warn(e);
     const startModel: string = o.model ?? initialModel();
-    const engine = pickEngine(startModel, process.env, hasClaudeCli);
+    const engine = openEngine(startModel, process.env, hasClaudeCli);
     if (engine.kind === "error") { console.error(c.err(engine.message)); process.exit(1); }
     if (engine.kind === "claude") { await runViaClaude(rootOf(o), promptParts, !!o.yes, o.model); return; }
     const root = rootOf(o);
@@ -601,7 +592,15 @@ program
     // `io.ask` é substituída pelo REPL (dock); em prompt único cai na pergunta simples.
     if (o.yes) perms.mode = "bypass";
     const io = { ask: async (q: string, _opts?: { force?: boolean }) => perms.mode === "bypass" || plainAsk(q) };
-    const api = await buildApiBackend(root, startModel, io);
+    // Claude sem conta nenhuma, com o fallback pronto: a sessão já nasce no qwen (com aviso, nunca em silêncio).
+    let opening: ApiBackendOpts = {};
+    if (engine.kind === "fallback") {
+      ui.warn(`⚠ ${NO_ANTHROPIC} (sem ANTHROPIC_API_KEY e sem o claude CLI) — abrindo no ${engine.label}. /fallback para detalhes.`);
+      const fallback = newFallbackState(startModel);
+      activateFallback(fallback, NO_ANTHROPIC);
+      opening = { fallback, engineLabel: () => NO_ANTHROPIC };
+    }
+    const api = await buildApiBackend(root, engine.kind === "fallback" ? FALLBACK_PROFILE : startModel, io, opening);
 
     if (promptParts.length) {
       if (await api.backend.turn(promptParts.join(" "), new AbortController().signal)) await api.learn();
