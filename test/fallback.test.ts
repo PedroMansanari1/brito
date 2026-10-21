@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import Anthropic from "@anthropic-ai/sdk";
-import { activateFallback, chooseModel, classifyAnthropicError, newFallbackState, onceRestore, renderFallback, shortError, triggersFallback } from "../src/provider/fallback.js";
+import fs from "node:fs";
+import path from "node:path";
+import { activateFallback, chooseModel, classifyAnthropicError, classifyClaudeCliFailure, collectClaudeFailure, newFallbackState, type ClaudeCliFailure, onceRestore, renderFallback, shortError, triggersFallback } from "../src/provider/fallback.js";
 
 test("estado novo: principal = modelo inicial, inativo", () => {
   assert.deepEqual(newFallbackState("claude-opus-5-5"), { primary: "claude-opus-5-5", active: false });
@@ -116,4 +118,65 @@ test("--once: fallback ativado no turno descarta o restore", () => {
   assert.equal(onceRestore("claude-opus-5-5", false), "claude-opus-5-5");
   assert.equal(onceRestore("claude-opus-5-5", true), null);
   assert.equal(onceRestore(null, false), null);
+});
+
+const CLI_FIX = path.join(import.meta.dirname, "fixtures", "claude-cli");
+/** Sinais de falha de uma fixture, como o `ClaudeSession.send` os junta. */
+function fromFixture(name: string): { f: ClaudeCliFailure; expected: string | null } {
+  const fx = JSON.parse(fs.readFileSync(path.join(CLI_FIX, name + ".json"), "utf8"));
+  const f: ClaudeCliFailure = { stderr: fx.stderr, code: fx.code, ...(fx.spawnError ? { spawnError: fx.spawnError } : {}) };
+  for (const ev of fx.events) collectClaudeFailure(f, ev);
+  return { f, expected: fx.expected };
+}
+
+test("fixtures do claude CLI: cada uma classifica como o esperado", () => {
+  const names = fs.readdirSync(CLI_FIX).filter((n) => n.endsWith(".json")).map((n) => n.slice(0, -5));
+  assert.ok(names.length >= 10);
+  for (const n of names) {
+    const { f, expected } = fromFixture(n);
+    if (expected === null) continue; // interrupção: a sessão nem classifica
+    assert.equal(classifyClaudeCliFailure(f), expected, n);
+  }
+});
+
+test("fixtures reais: campos estruturados chegam ao classificador", () => {
+  assert.deepEqual(fromFixture("logged-out").f, { stderr: "", code: 1, error: "authentication_failed", result: "Not logged in · Please run /login" });
+  assert.equal(fromFixture("invalid-api-key").f.status, 401);
+});
+
+test("frases conhecidas do limite da assinatura → quota, só com o texto", () => {
+  for (const result of [
+    "Claude AI usage limit reached|1761058800",
+    "5-hour limit reached ∙ resets 3pm",
+    "You've hit your limit · resets 3pm (America/Sao_Paulo)",
+    "Weekly limit reached ∙ resets Mon 10am",
+    "Opus weekly limit reached ∙ resets Mon 10am",
+  ]) assert.equal(classifyClaudeCliFailure({ result, stderr: "", code: 1 }), "quota", result);
+});
+
+test("claude CLI: texto sem campos estruturados", () => {
+  const k = (result: string, stderr = "") => classifyClaudeCliFailure({ result, stderr, code: 1 });
+  assert.equal(k("Not logged in · Please run /login"), "auth");
+  assert.equal(k("Invalid API key · Fix external API key"), "auth");
+  assert.equal(k("", "Failed to authenticate: OAuth token revoked. Please log in again"), "auth");
+  assert.equal(k("API Error: rate limit exceeded"), "rate_limit");
+  assert.equal(k("API Error: Repeated 529 Overloaded errors"), "overloaded");
+  assert.equal(k("Context limit reached · /compact or /clear to continue"), "other");
+  assert.equal(k("Budget limit reached ($5.00 of $5); stopping background agents."), "other");
+  assert.equal(k("Error: tool falhou"), "other");
+  assert.equal(k(""), "other");
+});
+
+test("claude CLI: estruturado vence o texto", () => {
+  assert.equal(classifyClaudeCliFailure({ error: "invalid_request", result: "You've hit your limit", stderr: "", code: 1 }), "other");
+  assert.equal(classifyClaudeCliFailure({ error: "rate_limit", result: "Request rejected (429)", stderr: "", code: 1 }), "rate_limit");
+  assert.equal(classifyClaudeCliFailure({ status: 401, stderr: "", code: 1 }), "auth");
+  assert.equal(classifyClaudeCliFailure({ spawnError: "spawn claude EPERM", stderr: "", code: -1 }), "other");
+});
+
+test("collectClaudeFailure ignora subagentes e resultados sem erro", () => {
+  const f: ClaudeCliFailure = { stderr: "", code: 1 };
+  collectClaudeFailure(f, { type: "assistant", parent_tool_use_id: "p", error: "rate_limit", message: { content: [] } });
+  collectClaudeFailure(f, { type: "result", is_error: false, result: "ok" });
+  assert.deepEqual(f, { stderr: "", code: 1 });
 });

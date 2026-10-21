@@ -24,6 +24,66 @@ export function classifyAnthropicError(e: unknown): FailureKind {
   return "other";
 }
 
+/** O que um turno do `claude` CLI deixou de sinal de falha (ver `test/fixtures/claude-cli/README.md`). */
+export interface ClaudeCliFailure {
+  /** `error` da mensagem `assistant` sintética (`authentication_failed`, `rate_limit`…) */
+  error?: string;
+  /** `api_error_status` (HTTP) do `assistant` ou do `result`; `null` quando a falha é local */
+  status?: number | null;
+  /** texto do `result` com `is_error` */
+  result?: string;
+  stderr: string;
+  code: number | null;
+  /** `child.on("error")`: o processo nem subiu */
+  spawnError?: string;
+}
+
+/** Acumula os sinais de falha de um evento do stream-json. Só a thread principal: subagente que falha não derruba o turno. */
+export function collectClaudeFailure(f: ClaudeCliFailure, ev: any): void {
+  if (ev?.parent_tool_use_id) return;
+  if (ev?.type === "assistant" && typeof ev.error === "string") {
+    f.error = ev.error;
+    if (typeof ev.api_error_status === "number") f.status = ev.api_error_status;
+  } else if (ev?.type === "result" && ev.is_error) {
+    f.result = String(ev.result ?? "");
+    if (typeof ev.api_error_status === "number") f.status = ev.api_error_status;
+  }
+}
+
+const CLI_AUTH_ERRORS = new Set(["authentication_failed", "oauth_org_not_allowed", "account_on_hold", "verification_required", "cloud_credential_error"]);
+/** Erros do CLI que são de conteúdo/bug: não troca, mesmo que o texto fale em "limit". */
+const CLI_OTHER_ERRORS = new Set(["invalid_request", "model_not_found", "max_output_tokens"]);
+/** "limit reached" que não é de conta: contexto, orçamento de agentes, concorrência. */
+const NOT_ACCOUNT_LIMIT = /context limit|budget limit|subagent limit|turn budget|export limit|device limit/i;
+const SUBSCRIPTION_LIMIT = /usage limit reached|limit reached|hit your (?:\w+ )?limit|resets \d|out of usage credits|spend limit|credit balance/i;
+
+/**
+ * Classifica a falha de um turno do `claude` CLI: primeiro pelos campos estruturados do stream-json, depois pelo texto
+ * (as frases mudam entre versões). Na dúvida, `other`. Interrupção nunca chega aqui (a sessão filtra antes).
+ */
+export function classifyClaudeCliFailure(f: ClaudeCliFailure): FailureKind {
+  if (f.spawnError) return /ENOENT|EACCES|not found/i.test(f.spawnError) ? "auth" : "other";
+  const text = `${f.result ?? ""}\n${f.stderr}`;
+  const accountLimit = SUBSCRIPTION_LIMIT.test(text) && !NOT_ACCOUNT_LIMIT.test(text);
+  const e = f.error ?? "";
+  if (CLI_OTHER_ERRORS.has(e)) return "other";
+  if (CLI_AUTH_ERRORS.has(e)) return "auth";
+  if (e === "billing_error") return "quota";
+  if (e === "rate_limit") return accountLimit ? "quota" : "rate_limit";
+  if (e === "overloaded" || e === "server_error") return "overloaded";
+  const s = f.status ?? 0;
+  if (s === 429) return accountLimit ? "quota" : "rate_limit";
+  if (s === 402) return "quota";
+  if (s === 401 || s === 403) return "auth";
+  if (s === 529 || s >= 500) return "overloaded";
+  if (NOT_ACCOUNT_LIMIT.test(text)) return "other";
+  if (accountLimit) return "quota";
+  if (/rate.?limit/i.test(text)) return "rate_limit";
+  if (/invalid api key|\/login|not logged in|oauth token|failed to authenticate|log in again/i.test(text)) return "auth";
+  if (/overloaded|\b529\b/i.test(text)) return "overloaded";
+  return "other";
+}
+
 /** Primeira linha do erro, curta, para o aviso e o `/fallback`. */
 export const shortError = (e: unknown, max = 120): string => {
   const line = String((e as { message?: string })?.message ?? e).split("\n")[0].trim();
