@@ -6,7 +6,9 @@ import type { TurnSink } from "./sink.js";
 import { initialEffort, initialModel } from "../model.js";
 import { providerFor } from "../provider/index.js";
 import { compactAtFor, resolveModel } from "../provider/resolve.js";
-import type { OutBlock } from "../provider/types.js";
+import type { ModelMessage, OutBlock, SendHooks } from "../provider/types.js";
+import { fallbackStatus } from "../engine.js";
+import { activateFallback, classifyAnthropicError, shortError, triggersFallback, type FallbackState } from "../provider/fallback.js";
 import { fmtBytes, findImages, imageBlock, splitOversize } from "../util/images.js";
 
 export const MODEL = initialModel();
@@ -21,6 +23,8 @@ export interface AgentOptions {
   log?: (s: string) => void;
   /** destino do texto e das ferramentas do turno; padrão = terminal */
   sink?: TurnSink;
+  /** estado do fallback Claude → qwen da sessão; sem ele (subagentes) a falha é erro normal */
+  fallback?: FallbackState;
 }
 
 /** Registro do último turno, usado pela reflexão que cria/melhora skills. */
@@ -94,20 +98,7 @@ export class Agent {
 
     for (let step = 0; step < this.maxSteps; step++) {
       if (signal?.aborted) throw new Error("abort");
-      // Num endpoint com raciocínio, pensar e responder dividem o mesmo orçamento: dobra para não cortar a resposta.
-      const target = resolveModel(this.model);
-      const thinking = this.effort !== "none";
-      const msg = await providerFor(this.model).send(
-        {
-          model: this.model,
-          maxTokens: target.kind === "openai" && thinking ? 16_384 : 8192,
-          system: typeof this.system === "function" ? this.system() : this.system,
-          tools: toApiTools(this.opts.tools),
-          messages: this.messages,
-          thinking,
-        },
-        { signal, onText: this.opts.quiet ? undefined : (t) => this.ui.text(t), onThinking: this.opts.quiet ? undefined : (t) => this.ui.thinking(t) },
-      );
+      const msg = await this.callModel({ signal, onText: this.opts.quiet ? undefined : (t) => this.ui.text(t), onThinking: this.opts.quiet ? undefined : (t) => this.ui.thinking(t) });
       this.contextTokens = msg.usage.input;
       this.usage.input += msg.usage.input;
       this.usage.output += msg.usage.output;
@@ -151,6 +142,42 @@ export class Agent {
     }
     this.ui.warn("Limite de passos atingido.");
     return finalText || "(limite de passos atingido sem resposta final)";
+  }
+
+  /**
+   * Um passo do loop principal. Se o Claude falha por conta/capacidade e o qwen está pronto, troca o modelo da sessão
+   * (uma vez só) e repete o mesmo passo: o histórico está intacto, porque a falha veio antes de a resposta entrar nele.
+   */
+  private async callModel(hooks: SendHooks): Promise<ModelMessage> {
+    // Num endpoint com raciocínio, pensar e responder dividem o mesmo orçamento: dobra para não cortar a resposta.
+    const target = resolveModel(this.model);
+    const thinking = this.effort !== "none";
+    try {
+      return await providerFor(this.model).send(
+        {
+          model: this.model,
+          maxTokens: target.kind === "openai" && thinking ? 16_384 : 8192,
+          system: typeof this.system === "function" ? this.system() : this.system,
+          tools: toApiTools(this.opts.tools),
+          messages: this.messages,
+          thinking,
+        },
+        hooks,
+      );
+    } catch (e) {
+      const fb = this.opts.fallback;
+      if (!fb || fb.active || hooks.signal?.aborted || target.kind !== "anthropic") throw e;
+      const kind = classifyAnthropicError(e);
+      if (!triggersFallback(kind)) throw e;
+      const status = fallbackStatus(this.model, process.env);
+      if (!status.ready) throw e;
+      const why = shortError(e);
+      this.ui.warn(`⚠ Claude falhou (${kind}: ${why}) — seguindo com ${status.label}. /fallback para detalhes, /model <claude> para voltar.`);
+      activateFallback(fb, `${kind} (${why})`);
+      this.model = status.name;
+      await this.compactIfNeeded();
+      return this.callModel(hooks);
+    }
   }
 
   async compactIfNeeded() {
