@@ -17,8 +17,8 @@ import { indexProject } from "./graph/indexer.js";
 import { Agent } from "./agent/loop.js";
 import { EFFORTS, MODEL_ALIASES, modelHelp, effortLabel, initialEffort, initialModel, loadProfiles, isEffort, loadReasoningDisplay, parseModelArgs, saveEffort, saveModel, saveReasoningDisplay, type Effort, type ModelScope } from "./model.js";
 import { hasClaudeCli, ClaudeSession } from "./agent/claude-cli.js";
-import { learnerModel, pickEngine } from "./engine.js";
-import { chooseModel, newFallbackState } from "./provider/fallback.js";
+import { fallbackStatus, learnerModel, pickEngine } from "./engine.js";
+import { chooseModel, newFallbackState, renderFallback, type FallbackState } from "./provider/fallback.js";
 import { compactAtFor, contextWindowFor, resolveModel } from "./provider/resolve.js";
 import { startApprovalServer } from "./agent/approval.js";
 import { serveMcp } from "./mcp/server.js";
@@ -212,6 +212,17 @@ function reasoningCommand(get: () => string, set: (e: string) => void) {
   };
 }
 
+/** `/fallback` (só leitura): modelo principal, o fallback qwen e o estado da troca. */
+function fallbackCommand(state: FallbackState, live: () => string, engine: (model: string) => string) {
+  return {
+    desc: "mostra o modelo principal e o fallback (qwen)",
+    run: async () => {
+      const primary = state.active ? state.primary : live();
+      for (const l of renderFallback(state, live(), engine(primary), fallbackStatus(primary, process.env))) ui.print(l);
+    },
+  };
+}
+
 /**
  * `/model [nome|alias] [--global|--session|--once]` (mesma semântica do Hermes). Vale para os dois backends:
  * `get`/`set` leem e trocam o modelo vivo; `--once` devolve o anterior depois do turno (`restoreOnce`).
@@ -377,6 +388,7 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean, m
     reset: () => session.reset(),
     commands: {
       "/model": modelCmd.cmd,
+      "/fallback": fallbackCommand(fallback, () => session.model, () => "claude CLI · assinatura"),
       "/effort": effortCommand(() => session.effort, (e) => { session.effort = e; }),
       "/reasoning": reasoningCommand(() => session.effort, (e) => { session.effort = e; }),
       "/tools": { desc: "ferramentas do grafo/memória/skills", run: async () => { for (const n of mcpTools) ui.print(`  ${ui.toolLabel(n)}`); } },
@@ -476,6 +488,7 @@ program
       onShell: () => { ctx.dirty = true; }, // `!cmd` pode ter mudado o código
       commands: {
         "/model": modelCmd.cmd,
+        "/fallback": fallbackCommand(fallback, () => agent.model, (m) => (resolveModel(m).kind === "openai" ? "endpoint" : "API Anthropic")),
         "/reasoning": reasoningCommand(() => agent.effort, (e) => { agent.effort = e; }),
         "/tools": { desc: "ferramentas disponíveis", run: async () => { for (const t of allTools()) ui.print(`  ${ui.toolLabel(t.name)}${c.dim(t.dangerous ? "  (pede aprovação)" : "")}`); } },
         "/context": {
