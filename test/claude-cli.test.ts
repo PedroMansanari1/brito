@@ -87,6 +87,20 @@ test("send: falha estruturada vira lastFailure classificada", async () => {
   } finally { sb.cleanup(); }
 });
 
+test("send: turno que falhou com result já abriu a sessão → próximo vai com --resume", async () => {
+  const sb = sandbox();
+  try {
+    const s = fakeSession(sb.root, "usage-limit-hit");
+    assert.equal(await s.send("oi"), false);
+    const args = (s as any).args("de novo") as string[];
+    assert.equal(args[args.indexOf(s.sessionId) - 1], "--resume");
+    const n = fakeSession(sb.root, null); // nem subiu: a sessão não existe, segue com --session-id
+    await n.send("oi");
+    const nargs = (n as any).args("de novo") as string[];
+    assert.equal(nargs[nargs.indexOf(n.sessionId) - 1], "--session-id");
+  } finally { sb.cleanup(); }
+});
+
 test("send: claude não encontrado (spawn ENOENT) → auth", async () => {
   const sb = sandbox();
   try {

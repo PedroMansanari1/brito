@@ -34,7 +34,7 @@ import type { Msg } from "./provider/types.js";
 import { buildSystemPrompt, graphStatsLine } from "./agent/prompt.js";
 import { allTools } from "./tools/registry.js";
 import { ui, c, fmtTokens } from "./ui/ui.js";
-import { runRepl, switchableBackend, type ReplBackend } from "./repl.js";
+import { runRepl, switchableBackend, type ReplBackend, type SwitchableBackend } from "./repl.js";
 
 const pkgVersion = (JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
 const program = new Command().name("brito").description("CLI de agentes de desenvolvimento com grafo de conhecimento").version(pkgVersion, "-v, --version", "mostra a versão").enablePositionalOptions();
@@ -227,8 +227,10 @@ function fallbackCommand(state: FallbackState, live: () => string, engine: (mode
 /**
  * `/model [nome|alias] [--global|--session|--once]` (mesma semântica do Hermes). Vale para os dois backends:
  * `get`/`set` leem e trocam o modelo vivo; `--once` devolve o anterior depois do turno (`restoreOnce`).
+ * `divert`: o modelo roda no outro motor (claude CLI ↔ modo API); ele troca o motor e devolve true.
  */
-function modelCommand(get: () => string, set: (m: string) => void, note: string, veto: (m: string) => string | null = () => null) {
+function modelCommand(get: () => string, set: (m: string) => void, note: string, veto: (m: string) => string | null = () => null,
+  divert?: (m: string, scope: ModelScope) => Promise<boolean>) {
   let restore: string | null = null;
   return {
     /** `fallbackActive`: a troca automática aconteceu no turno; desfazer o `--once` levaria de volta ao Claude que caiu. */
@@ -245,6 +247,7 @@ function modelCommand(get: () => string, set: (m: string) => void, note: string,
           req.model = picked.model;
           req.scope = picked.scope;
         }
+        if (divert && await divert(req.model, req.scope)) return;
         const refused = veto(req.model);
         if (refused) { ui.warn(refused); return; }
         const old = get();
@@ -351,6 +354,8 @@ interface ApiBackendOpts {
   messages?: Msg[];
   /** grafo já aberto; padrão = abre `root` */
   graph?: GraphStore;
+  /** `/model` para um modelo que roda no claude CLI: troca o motor e devolve true (ver `modelCommand`) */
+  divert?: (m: string, scope: ModelScope) => Promise<boolean>;
 }
 
 /**
@@ -395,7 +400,7 @@ async function buildApiBackend(root: string, model: string, io: { ask: (q: strin
   const noApiKey = (m: string) => (resolveModel(m).kind === "anthropic" && !process.env.ANTHROPIC_API_KEY?.trim()
     ? `o ${m} precisa de ANTHROPIC_API_KEY neste modo; sem ela, reabra com \`brito --model ${m}\` para usar o claude CLI`
     : null);
-  const modelCmd = modelCommand(() => agent.model, (m) => { agent.model = m; chooseModel(fallback, m); }, "(troque com /model; subagentes explore usam BRITO_EXPLORE_MODEL)", noApiKey);
+  const modelCmd = modelCommand(() => agent.model, (m) => { agent.model = m; chooseModel(fallback, m); }, "(troque com /model; subagentes explore usam BRITO_EXPLORE_MODEL)", noApiKey, o.divert);
   const backend: ReplBackend = {
     model: () => agent.model,
     contextTokens: () => agent.contextTokens,
@@ -428,14 +433,19 @@ async function buildApiBackend(root: string, model: string, io: { ask: (q: strin
   return { backend, agent, learn, symbols: () => symCount, notes: noteCount };
 }
 
-async function runViaClaude(root: string, promptParts: string[], yes: boolean, model?: string) {
-  const startedAt = Date.now();
-  if (yes) perms.mode = "bypass";
-  // O REPL troca `io.ask`; em prompt único cai na pergunta simples.
-  const io = { ask: async (q: string, _opts?: { force?: boolean }): Promise<boolean> => perms.mode === "bypass" || plainAsk(q) };
-  const approval = startApprovalServer({ ask: (q, opts) => io.ask(q, opts) });
+type ApiBackend = Awaited<ReturnType<typeof buildApiBackend>>;
+type Io = { ask: (q: string, opts?: { force?: boolean }) => Promise<boolean> };
+
+/** Um servidor de aprovação por processo (o endereço leva o pid): o claude CLI pode ser aberto de novo na mesma sessão. */
+let approvalServer: ReturnType<typeof startApprovalServer> | null = null;
+
+/**
+ * Motor claude CLI. `sw` é o backend do REPL: `/model <perfil>` troca para o modo API (com a conversa do claude) e
+ * `/model <claude>` lá volta para cá. Também serve ao prompt único, que não troca de motor pelo `/model`.
+ */
+async function buildClaudeBackend(root: string, io: Io, sw: () => SwitchableBackend, model?: string) {
+  approvalServer ??= startApprovalServer({ ask: (q, opts) => io.ask(q, opts) });
   // O banco aceita um único processo com acesso de escrita: indexa, lê as stats e solta o banco para o servidor MCP.
-  { const { offerNoteMigration } = await import("./graph/migrate.js"); await offerNoteMigration(root, (q) => migrationAsk(q), (m) => ui.info(m)); }
   const graph = await GraphStore.open(root);
   ui.info("sincronizando grafo…");
   await indexProject(root, graph);
@@ -445,7 +455,7 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean, m
 
   const session = new ClaudeSession({
     // Foto da abertura: o índice é atualizado pelo servidor MCP (outro processo) e este processo não reabre o banco.
-    root, approvalSock: approval.path, stats: graphStatsLine(Number(syms), Number(notes), "start"),
+    root, approvalSock: approvalServer.path, stats: graphStatsLine(Number(syms), Number(notes), "start"),
     mcpCommand: { command: process.execPath, args: [...process.execArgv, process.argv[1], "mcp-serve", "-d", root] },
   });
   loadProjectAgents(root);
@@ -458,6 +468,26 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean, m
   session.effort = initialEffort();
   const fallback = newFallbackState(session.requestedModel || session.model);
 
+  /** Loop próprio do Brito no `name`, com a conversa do claude; `/model <claude>` nele volta para cá. */
+  const openApi = async (name: string, label: string, opts: ApiBackendOpts = {}) => {
+    let api: ApiBackend | undefined;
+    try {
+      api = await buildApiBackend(root, name, io, {
+        fallback, effort: session.effort, loadedSkills: session.loadedSkills,
+        messages: historyForFallback(session.allTurns), graph: await openGraphAfterClaude(root), ...opts,
+        divert: async (m, scope) => {
+          if (resolveModel(m).kind !== "anthropic") return false;
+          sw().swap(backend);
+          await api!.backend.close();
+          ui.info("de volta ao claude CLI: a conversa do claude não inclui o que foi feito no modo API");
+          await modelCmd.cmd.run([m, `--${scope}`]);
+          return true;
+        },
+      });
+    } catch (e: any) { ui.error(`não consegui abrir o ${label}: ${e?.message ?? e}`); return null; }
+    return api;
+  };
+
   /**
    * O turno do claude caiu por conta/capacidade: monta o loop próprio no qwen com a conversa do claude e refaz o pedido
    * nele. null = a falha não leva ao fallback (ou ele não está pronto); a sessão segue no claude.
@@ -467,30 +497,29 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean, m
     const f = session.lastFailure;
     if (!f || !status.ready || !cliShouldFallBack(f, fallback, status, signal.aborted)) return null;
     ui.warn(fallbackWarning(f.kind, f.message, status.label));
-    let api: Awaited<ReturnType<typeof buildApiBackend>>;
-    try {
-      api = await buildApiBackend(root, status.name, io, {
-        fallback, engineLabel: () => "claude CLI · assinatura", effort: session.effort, loadedSkills: session.loadedSkills,
-        messages: historyForFallback(session.allTurns), graph: await openGraphAfterClaude(root),
-      });
-    } catch (e: any) { ui.error(`não consegui abrir o ${status.label}: ${e?.message ?? e}`); return null; }
+    const api = await openApi(status.name, status.label, { engineLabel: () => "claude CLI · assinatura" });
+    if (!api) return null;
     activateFallback(fallback, `${f.kind} (${f.message})`);
     return { api, retry: () => api.backend.turn(retryPrompt(text), signal) };
   };
 
-  if (promptParts.length) {
-    const text = promptParts.join(" ");
-    if (await session.send(text)) { await learn(); return; }
-    const fb = await switchToQwen(text, new AbortController().signal);
-    if (!fb) { process.exitCode = 1; return; }
-    if (await fb.retry()) await fb.api.learn(); else process.exitCode = 1;
-    await fb.api.backend.close();
-    return;
-  }
+  /** `/model <perfil>`: perfis de endpoint rodam no loop próprio do Brito, então o motor troca para o modo API. */
+  const toApi = async (m: string, scope: ModelScope) => {
+    const r = resolveModel(m);
+    if (r.kind !== "openai") return false;
+    if (scope === "once") { ui.warn(`o ${r.label} roda no modo API: --once não troca de motor; use /model ${r.name}`); return true; }
+    const old = session.requestedModel || session.model;
+    const api = await openApi(r.name, r.label);
+    if (!api) return true;
+    modelCmd.restoreOnce(true); // um `--once` pendente devolveria o Claude depois do primeiro turno no outro motor
+    sw().swap(api.backend);
+    ui.print(`  ${c.muted(old)} → ${c.soft(r.name)}`);
+    ui.info(`modo API: o ${r.label} segue a conversa do claude`);
+    if (scope === "global") { saveModel(r.name); ui.print(c.muted("    salvo como padrão (~/.brito/config.json)")); }
+    return true;
+  };
 
-  // Perfis de endpoint rodam no loop próprio do Brito, não dentro do claude: aqui o /model só avisa como reabrir.
-  const modelCmd = modelCommand(() => session.requestedModel || session.model, (m) => { session.requestedModel = m; session.model = m; chooseModel(fallback, m); }, "(assinatura do claude CLI)",
-    (m) => { const r = resolveModel(m); return r.kind === "openai" ? `o ${r.label} roda no modo API: reabra com \`brito --model ${r.name}\`` : null; });
+  const modelCmd = modelCommand(() => session.requestedModel || session.model, (m) => { session.requestedModel = m; session.model = m; chooseModel(fallback, m); }, "(assinatura do claude CLI)", () => null, toApi);
   ui.reasoning = loadReasoningDisplay();
   const unavailable = { desc: "indisponível no modo claude CLI", run: async () => { ui.warn("não está disponível no modo claude CLI"); } };
   const mcpTools = allTools().map((t) => t.name).filter((n) => /^(graph_|skill_)/.test(n) || n === "remember" || n === "recall");
@@ -505,8 +534,7 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean, m
       const fb = await switchToQwen(text, signal);
       if (!fb) return false;
       modelCmd.restoreOnce(true); // um `--once` pendente voltaria ao Claude que acabou de cair
-      fb.api.backend.commands["/model"] = backToClaude(fb.api);
-      sw.swap(fb.api.backend);
+      sw().swap(fb.api.backend);
       return fb.retry();
     },
     afterTurn: async () => { modelCmd.restoreOnce(); await learn(); },
@@ -533,39 +561,35 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean, m
     },
     close: async () => {},
   };
-  const sw = switchableBackend(backend);
+  return { backend, session, learn, switchToQwen, modelCmd, syms: Number(syms), notes: Number(notes), mcpTools };
+}
 
-  /**
-   * `/model` no qwen depois da troca: um Claude volta ao claude CLI (sem API key é o único motor do Claude). A conversa
-   * do claude retoma de onde ele caiu; o que foi feito no qwen não entra nela.
-   */
-  const backToClaude = (api: Awaited<ReturnType<typeof buildApiBackend>>) => {
-    const apiModel = api.backend.commands["/model"];
-    return {
-      desc: apiModel.desc,
-      run: async (args: string[]) => {
-        let req = parseModelArgs(args.join(" "));
-        if (!req.errors.length && !req.model && ui.canSelect) {
-          const picked = await pickModel(sw.model());
-          if (!picked) { ui.info("cancelado"); return; }
-          args = [picked.model, `--${picked.scope}`];
-          req = parseModelArgs(args.join(" "));
-        }
-        if (req.errors.length || !req.model || resolveModel(req.model).kind !== "anthropic") { await apiModel.run(args); return; }
-        sw.swap(backend);
-        await api.backend.close();
-        ui.info("de volta ao claude CLI: a conversa do claude não inclui o que foi feito no qwen");
-        await modelCmd.cmd.run(args);
-      },
-    };
-  };
+async function runViaClaude(root: string, promptParts: string[], yes: boolean, model?: string) {
+  const startedAt = Date.now();
+  if (yes) perms.mode = "bypass";
+  // O REPL troca `io.ask`; em prompt único cai na pergunta simples.
+  const io: Io = { ask: async (q: string, _opts?: { force?: boolean }): Promise<boolean> => perms.mode === "bypass" || plainAsk(q) };
+  { const { offerNoteMigration } = await import("./graph/migrate.js"); await offerNoteMigration(root, (q) => migrationAsk(q), (m) => ui.info(m)); }
+  let sw!: SwitchableBackend;
+  const claude = await buildClaudeBackend(root, io, () => sw, model);
 
+  if (promptParts.length) {
+    const text = promptParts.join(" ");
+    if (await claude.session.send(text)) { await claude.learn(); return; }
+    const fb = await claude.switchToQwen(text, new AbortController().signal);
+    if (!fb) { process.exitCode = 1; return; }
+    if (await fb.retry()) await fb.api.learn(); else process.exitCode = 1;
+    await fb.api.backend.close();
+    return;
+  }
+
+  sw = switchableBackend(claude.backend);
   ui.info("modo claude CLI: usa o login da sua conta; tools do grafo/memória/skills via MCP.");
   await runRepl(sw, {
     root, yes, startedAt, io,
     banner: {
-      dir: root, symbols: Number(syms), notes: Number(notes),
-      tools: ["read_file", "write_file", "edit_file", "glob", "grep", "bash", "delegate", ...mcpTools],
+      dir: root, symbols: claude.syms, notes: claude.notes,
+      tools: ["read_file", "write_file", "edit_file", "glob", "grep", "bash", "delegate", ...claude.mcpTools],
       skills: skillInfo(root), agents: listAgents().map((a) => a.name),
     },
   });
@@ -600,6 +624,20 @@ program
       activateFallback(fallback, NO_ANTHROPIC);
       opening = { fallback, engineLabel: () => NO_ANTHROPIC };
     }
+    let sw!: SwitchableBackend;
+    // Sem ANTHROPIC_API_KEY o Claude só roda no claude CLI: `/model <claude>` troca o motor em vez de recusar.
+    // A conversa feita aqui não passa para o claude; o claude CLI aberto é reaproveitado nas voltas seguintes.
+    let claude: Awaited<ReturnType<typeof buildClaudeBackend>> | null = null;
+    if (hasClaudeCli()) opening.divert = async (m, scope) => {
+      if (resolveModel(m).kind !== "anthropic" || process.env.ANTHROPIC_API_KEY?.trim()) return false;
+      await sw.current().close(); // solta o grafo para o servidor MCP do claude
+      try { claude ??= await buildClaudeBackend(root, io, () => sw); }
+      catch (e: any) { ui.error(`não consegui abrir o claude CLI: ${e?.message ?? e}`); return true; }
+      sw.swap(claude.backend);
+      ui.info("modo claude CLI: usa o login da sua conta; a conversa feita no modo API não passa para o claude");
+      await claude.modelCmd.cmd.run([m, `--${scope}`]);
+      return true;
+    };
     const api = await buildApiBackend(root, engine.kind === "fallback" ? FALLBACK_PROFILE : startModel, io, opening);
 
     if (promptParts.length) {
@@ -608,7 +646,8 @@ program
       return;
     }
 
-    await runRepl(api.backend, {
+    sw = switchableBackend(api.backend);
+    await runRepl(sw, {
       root, yes: !!o.yes, startedAt, io,
       banner: {
         dir: root, symbols: api.symbols(), notes: api.notes, tools: allTools().map((t) => t.name),

@@ -245,7 +245,8 @@ export class ClaudeSession {
       const handle = (ev: any) => {
         recordStreamEvent(turn, ev, this.loadedSkills);
         collectClaudeFailure(failure, ev);
-        if (ev.type === "assistant") {
+        // A mensagem sintética de erro sai pelo `result` (ui.error); aqui viraria fala do Brito e modelo "<synthetic>".
+        if (ev.type === "assistant" && !ev.is_api_error_message) {
           for (const b of ev.message?.content ?? []) {
             if (b.type === "thinking" && b.thinking && !ev.parent_tool_use_id) ui.thinking(b.thinking);
             else if (b.type === "text" && b.text) { ui.text(b.text); ui.textEnd(); }
@@ -262,6 +263,9 @@ export class ClaudeSession {
         } else if (ev.type === "user") {
           for (const b of ev.message?.content ?? []) if (b.type === "tool_result") ui.toolEnd(b.tool_use_id, !!b.is_error, resultText(b.content));
         } else if (ev.type === "result") {
+          // Houve turno (mesmo com erro, ex.: limite da assinatura): o claude já gravou a sessão com este id, e o
+          // próximo turno precisa de --resume — repetir --session-id dá "Session ID … is already in use".
+          this.started = true;
           this.usage.input += (ev.usage?.input_tokens ?? 0) + (ev.usage?.cache_read_input_tokens ?? 0) + (ev.usage?.cache_creation_input_tokens ?? 0);
           this.usage.output += ev.usage?.output_tokens ?? 0;
           this.usage.cacheRead += ev.usage?.cache_read_input_tokens ?? 0;
