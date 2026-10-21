@@ -1,4 +1,34 @@
+import Anthropic from "@anthropic-ai/sdk";
 import { FALLBACK_PROFILE, type FallbackStatus } from "../engine.js";
+
+/** Por que o Claude falhou. Só `other` (erro de conteúdo, bug, interrupção) não troca para o qwen. */
+export type FailureKind = "quota" | "rate_limit" | "overloaded" | "auth" | "network" | "other";
+
+export const triggersFallback = (k: FailureKind) => k !== "other";
+
+/**
+ * Classifica um erro da API da Anthropic (já depois dos retries do SDK). Na dúvida, `other`: melhor não trocar do que
+ * esconder um bug atrás do qwen.
+ */
+export function classifyAnthropicError(e: unknown): FailureKind {
+  if (e instanceof Anthropic.APIUserAbortError || (e as { name?: string })?.name === "AbortError") return "other";
+  if (e instanceof Anthropic.APIConnectionError) return "network"; // inclui APIConnectionTimeoutError
+  if (!(e instanceof Anthropic.APIError)) return "other";
+  const status = e.status ?? 0;
+  const type = e.type ?? "";
+  if (status === 429 || type === "rate_limit_error") return "rate_limit";
+  if (status === 402 || type === "billing_error" || (status === 400 && /credit balance is too low/i.test(e.message))) return "quota";
+  if (status === 401 || status === 403 || type === "authentication_error" || type === "permission_error") return "auth";
+  if (type === "timeout_error") return "network";
+  if (status === 529 || status >= 500 || type === "overloaded_error") return "overloaded";
+  return "other";
+}
+
+/** Primeira linha do erro, curta, para o aviso e o `/fallback`. */
+export const shortError = (e: unknown, max = 120): string => {
+  const line = String((e as { message?: string })?.message ?? e).split("\n")[0].trim();
+  return line.length > max ? line.slice(0, max - 1) + "…" : line;
+};
 
 /**
  * Estado do fallback Claude → qwen numa sessão. Uma troca por sessão (como o Hermes); só o `/model` desfaz.
@@ -31,6 +61,12 @@ export function activateFallback(s: FallbackState, reason: string, at = Date.now
   s.reason = reason;
   s.at = at;
 }
+
+/**
+ * Modelo a devolver depois de um turno com `/model --once`. O `--once` zera o fallback, então `active` no fim do turno
+ * quer dizer que a troca aconteceu durante ele: aí o `restore` é descartado (voltaria ao Claude que acabou de cair).
+ */
+export const onceRestore = (restore: string | null, fallbackActive: boolean): string | null => (fallbackActive ? null : restore);
 
 const hhmm = (ms: number) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
 

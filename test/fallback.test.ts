@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { activateFallback, chooseModel, newFallbackState, renderFallback } from "../src/provider/fallback.js";
+import Anthropic from "@anthropic-ai/sdk";
+import { activateFallback, chooseModel, classifyAnthropicError, newFallbackState, onceRestore, renderFallback, shortError, triggersFallback } from "../src/provider/fallback.js";
 
 test("estado novo: principal = modelo inicial, inativo", () => {
   assert.deepEqual(newFallbackState("claude-opus-5-5"), { primary: "claude-opus-5-5", active: false });
@@ -74,4 +75,45 @@ test("/fallback: ATIVO mostra o principal original, o qwen em uso e o horário",
     "  fallback   Qwen 27B (OCI)  qwen · ~/.brito/config.json  ● em uso",
     "  estado     ATIVO desde 14:32 — Claude falhou: rate_limit (429 Too Many Requests). /model <claude> para voltar",
   ]);
+});
+
+const apiErr = (status: number, type: string, message = "x") =>
+  Anthropic.APIError.generate(status, { type: "error", error: { type, message } }, message, new Headers());
+
+test("classificação dos erros da API da Anthropic", () => {
+  const casos: [unknown, string][] = [
+    [apiErr(429, "rate_limit_error"), "rate_limit"],
+    [apiErr(529, "overloaded_error"), "overloaded"],
+    [apiErr(500, "api_error"), "overloaded"],
+    [apiErr(503, "api_error"), "overloaded"],
+    [apiErr(402, "billing_error"), "quota"],
+    [apiErr(400, "invalid_request_error", "Your credit balance is too low to access the Anthropic API."), "quota"],
+    [apiErr(401, "authentication_error"), "auth"],
+    [apiErr(403, "permission_error"), "auth"],
+    [new Anthropic.APIConnectionError({ message: "falhou a conexão" }), "network"],
+    [new Anthropic.APIConnectionTimeoutError(), "network"],
+    [apiErr(400, "invalid_request_error", "messages.1: tool_use ids must be unique"), "other"],
+    [apiErr(404, "not_found_error"), "other"],
+    [new Anthropic.APIUserAbortError(), "other"],
+    [Object.assign(new Error("abortado"), { name: "AbortError" }), "other"],
+    [new Error("qualquer"), "other"],
+    ["texto", "other"],
+  ];
+  for (const [e, k] of casos) assert.equal(classifyAnthropicError(e), k, String((e as Error)?.message ?? e));
+});
+
+test("só `other` não dispara o fallback", () => {
+  for (const k of ["quota", "rate_limit", "overloaded", "auth", "network"] as const) assert.equal(triggersFallback(k), true);
+  assert.equal(triggersFallback("other"), false);
+});
+
+test("shortError: primeira linha, cortada", () => {
+  assert.equal(shortError(new Error("a\nb")), "a");
+  assert.equal(shortError(new Error("x".repeat(200)), 10), "x".repeat(9) + "…");
+});
+
+test("--once: fallback ativado no turno descarta o restore", () => {
+  assert.equal(onceRestore("claude-opus-5-5", false), "claude-opus-5-5");
+  assert.equal(onceRestore("claude-opus-5-5", true), null);
+  assert.equal(onceRestore(null, false), null);
 });
