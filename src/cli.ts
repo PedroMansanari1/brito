@@ -16,9 +16,9 @@ import { GraphLockedError, GraphStore } from "./graph/store.js";
 import { indexProject } from "./graph/indexer.js";
 import { Agent } from "./agent/loop.js";
 import { EFFORTS, MODEL_ALIASES, modelHelp, effortLabel, initialEffort, initialModel, loadProfiles, isEffort, loadReasoningDisplay, parseModelArgs, saveEffort, saveModel, saveReasoningDisplay, type Effort, type ModelScope } from "./model.js";
-import { hasClaudeCli, ClaudeSession } from "./agent/claude-cli.js";
+import { hasClaudeCli, historyForFallback, ClaudeSession } from "./agent/claude-cli.js";
 import { fallbackStatus, learnerModel, pickEngine } from "./engine.js";
-import { chooseModel, newFallbackState, onceRestore, renderFallback, type FallbackState } from "./provider/fallback.js";
+import { activateFallback, chooseModel, cliShouldFallBack, fallbackWarning, newFallbackState, onceRestore, renderFallback, retryPrompt, type FallbackState } from "./provider/fallback.js";
 import { compactAtFor, contextWindowFor, resolveModel } from "./provider/resolve.js";
 import { startApprovalServer } from "./agent/approval.js";
 import { serveMcp } from "./mcp/server.js";
@@ -34,7 +34,7 @@ import type { Msg } from "./provider/types.js";
 import { buildSystemPrompt, graphStatsLine } from "./agent/prompt.js";
 import { allTools } from "./tools/registry.js";
 import { ui, c, fmtTokens } from "./ui/ui.js";
-import { runRepl, type ReplBackend } from "./repl.js";
+import { runRepl, switchableBackend, type ReplBackend } from "./repl.js";
 
 const pkgVersion = (JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
 const program = new Command().name("brito").description("CLI de agentes de desenvolvimento com grafo de conhecimento").version(pkgVersion, "-v, --version", "mostra a versão").enablePositionalOptions();
@@ -337,6 +337,19 @@ function makeLearner(getTurns: () => TurnRecord[], ctx: ToolContext, complete: C
   };
 }
 
+/**
+ * Abre o grafo no processo do REPL depois de um turno do claude: o servidor MCP dele solta o lock ao morrer, mas pode
+ * levar um instante além do `close` do filho. Uma tentativa extra curta cobre isso.
+ */
+async function openGraphAfterClaude(root: string): Promise<GraphStore> {
+  try { return await GraphStore.open(root); }
+  catch (e) {
+    if (!(e instanceof GraphLockedError)) throw e;
+    await new Promise((r) => setTimeout(r, 500));
+    return GraphStore.open(root);
+  }
+}
+
 /** Como montar o modo API no meio da sessão (troca claude CLI → qwen); na abertura normal tudo fica no padrão. */
 interface ApiBackendOpts {
   /** estado do fallback da sessão (o da troca já vem ativo); padrão = novo, com `model` como principal */
@@ -451,17 +464,42 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean, m
   const learn = makeLearner(() => session.recentTurns, learnCtx, claudeCliComplete, () => process.env.BRITO_LEARN_MODEL ?? ""); // "" = modelo padrão do claude
 
   if (model) { session.requestedModel = resolveModel(model).wireModel; session.model = session.requestedModel; }
+  session.effort = initialEffort();
+  const fallback = newFallbackState(session.requestedModel || session.model);
+
+  /**
+   * O turno do claude caiu por conta/capacidade: monta o loop próprio no qwen com a conversa do claude e refaz o pedido
+   * nele. null = a falha não leva ao fallback (ou ele não está pronto); a sessão segue no claude.
+   */
+  const switchToQwen = async (text: string, signal: AbortSignal) => {
+    const status = fallbackStatus(fallback.primary, process.env);
+    const f = session.lastFailure;
+    if (!f || !status.ready || !cliShouldFallBack(f, fallback, status, signal.aborted)) return null;
+    ui.warn(fallbackWarning(f.kind, f.message, status.label));
+    let api: Awaited<ReturnType<typeof buildApiBackend>>;
+    try {
+      api = await buildApiBackend(root, status.name, io, {
+        fallback, engineLabel: () => "claude CLI · assinatura", effort: session.effort, loadedSkills: session.loadedSkills,
+        messages: historyForFallback(session.allTurns), graph: await openGraphAfterClaude(root),
+      });
+    } catch (e: any) { ui.error(`não consegui abrir o ${status.label}: ${e?.message ?? e}`); return null; }
+    activateFallback(fallback, `${f.kind} (${f.message})`);
+    return { api, retry: () => api.backend.turn(retryPrompt(text), signal) };
+  };
+
   if (promptParts.length) {
-    const ok = await session.send(promptParts.join(" "));
-    if (ok) await learn(); else process.exitCode = 1;
+    const text = promptParts.join(" ");
+    if (await session.send(text)) { await learn(); return; }
+    const fb = await switchToQwen(text, new AbortController().signal);
+    if (!fb) { process.exitCode = 1; return; }
+    if (await fb.retry()) await fb.api.learn(); else process.exitCode = 1;
+    await fb.api.backend.close();
     return;
   }
 
   // Perfis de endpoint rodam no loop próprio do Brito, não dentro do claude: aqui o /model só avisa como reabrir.
-  const fallback = newFallbackState(session.requestedModel || session.model);
   const modelCmd = modelCommand(() => session.requestedModel || session.model, (m) => { session.requestedModel = m; session.model = m; chooseModel(fallback, m); }, "(assinatura do claude CLI)",
     (m) => { const r = resolveModel(m); return r.kind === "openai" ? `o ${r.label} roda no modo API: reabra com \`brito --model ${r.name}\`` : null; });
-  session.effort = initialEffort();
   ui.reasoning = loadReasoningDisplay();
   const unavailable = { desc: "indisponível no modo claude CLI", run: async () => { ui.warn("não está disponível no modo claude CLI"); } };
   const mcpTools = allTools().map((t) => t.name).filter((n) => /^(graph_|skill_)/.test(n) || n === "remember" || n === "recall");
@@ -471,7 +509,15 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean, m
     usage: () => session.usage,
     cost: () => (session.costUsd > 0 ? session.costUsd : undefined),
     get ctxWindow() { return session.contextWindow ?? CTX_WINDOW; },
-    turn: (text) => session.send(text),
+    turn: async (text, signal) => {
+      if (await session.send(text)) return true;
+      const fb = await switchToQwen(text, signal);
+      if (!fb) return false;
+      modelCmd.restoreOnce(true); // um `--once` pendente voltaria ao Claude que acabou de cair
+      fb.api.backend.commands["/model"] = backToClaude(fb.api);
+      sw.swap(fb.api.backend);
+      return fb.retry();
+    },
     afterTurn: async () => { modelCmd.restoreOnce(); await learn(); },
     abort: () => session.abort(),
     reset: () => session.reset(),
@@ -496,8 +542,35 @@ async function runViaClaude(root: string, promptParts: string[], yes: boolean, m
     },
     close: async () => {},
   };
+  const sw = switchableBackend(backend);
+
+  /**
+   * `/model` no qwen depois da troca: um Claude volta ao claude CLI (sem API key é o único motor do Claude). A conversa
+   * do claude retoma de onde ele caiu; o que foi feito no qwen não entra nela.
+   */
+  const backToClaude = (api: Awaited<ReturnType<typeof buildApiBackend>>) => {
+    const apiModel = api.backend.commands["/model"];
+    return {
+      desc: apiModel.desc,
+      run: async (args: string[]) => {
+        let req = parseModelArgs(args.join(" "));
+        if (!req.errors.length && !req.model && ui.canSelect) {
+          const picked = await pickModel(sw.model());
+          if (!picked) { ui.info("cancelado"); return; }
+          args = [picked.model, `--${picked.scope}`];
+          req = parseModelArgs(args.join(" "));
+        }
+        if (req.errors.length || !req.model || resolveModel(req.model).kind !== "anthropic") { await apiModel.run(args); return; }
+        sw.swap(backend);
+        await api.backend.close();
+        ui.info("de volta ao claude CLI: a conversa do claude não inclui o que foi feito no qwen");
+        await modelCmd.cmd.run(args);
+      },
+    };
+  };
+
   ui.info("modo claude CLI: usa o login da sua conta; tools do grafo/memória/skills via MCP.");
-  await runRepl(backend, {
+  await runRepl(sw, {
     root, yes, startedAt, io,
     banner: {
       dir: root, symbols: Number(syms), notes: Number(notes),

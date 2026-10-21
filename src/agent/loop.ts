@@ -8,7 +8,7 @@ import { providerFor } from "../provider/index.js";
 import { compactAtFor, resolveModel } from "../provider/resolve.js";
 import type { ModelMessage, OutBlock, SendHooks } from "../provider/types.js";
 import { fallbackStatus } from "../engine.js";
-import { activateFallback, classifyAnthropicError, shortError, triggersFallback, type FallbackState } from "../provider/fallback.js";
+import { activateFallback, classifyAnthropicError, fallbackWarning, shortError, triggersFallback, type FallbackState } from "../provider/fallback.js";
 import { fmtBytes, findImages, imageBlock, splitOversize } from "../util/images.js";
 
 export const MODEL = initialModel();
@@ -172,7 +172,7 @@ export class Agent {
       const status = fallbackStatus(this.model, process.env);
       if (!status.ready) throw e;
       const why = shortError(e);
-      this.ui.warn(`⚠ Claude falhou (${kind}: ${why}) — seguindo com ${status.label}. /fallback para detalhes, /model <claude> para voltar.`);
+      this.ui.warn(fallbackWarning(kind, why, status.label));
       activateFallback(fb, `${kind} (${why})`);
       this.model = status.name;
       await this.compactIfNeeded();

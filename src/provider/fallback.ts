@@ -122,6 +122,22 @@ export function activateFallback(s: FallbackState, reason: string, at = Date.now
   s.at = at;
 }
 
+/** Aviso impresso na troca (modo API e claude CLI): a troca nunca é silenciosa. */
+export const fallbackWarning = (kind: FailureKind, why: string, label: string) =>
+  `⚠ Claude falhou (${kind}: ${why}) — seguindo com ${label}. /fallback para detalhes, /model <claude> para voltar.`;
+
+/**
+ * O turno do claude CLI que falhou deve ser refeito no qwen? Só com falha de conta/capacidade, fallback pronto e
+ * ainda não usado na sessão. Interrupção não deixa `failure` (a sessão filtra), mas o `aborted` fica de garantia.
+ */
+export function cliShouldFallBack(failure: { kind: FailureKind } | null, state: FallbackState, status: FallbackStatus, aborted = false): boolean {
+  return !!failure && triggersFallback(failure.kind) && status.ready && !state.active && !aborted;
+}
+
+/** Nota que precede o pedido refeito no qwen depois da troca de motor (spec §5.5). */
+export const RETRY_NOTE = "[O modelo anterior (Claude) falhou no meio deste pedido. O que já foi feito está no histórico acima; continue de onde parou sem refazer ações já concluídas.]";
+export const retryPrompt = (text: string) => `${RETRY_NOTE}\n\n${text}`;
+
 /**
  * Modelo a devolver depois de um turno com `/model --once`. O `--once` zera o fallback, então `active` no fim do turno
  * quer dizer que a troca aconteceu durante ele: aí o `restore` é descartado (voltaria ao Claude que acabou de cair).

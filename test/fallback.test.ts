@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
 import path from "node:path";
-import { activateFallback, chooseModel, classifyAnthropicError, classifyClaudeCliFailure, collectClaudeFailure, newFallbackState, type ClaudeCliFailure, onceRestore, renderFallback, shortError, triggersFallback } from "../src/provider/fallback.js";
+import { activateFallback, chooseModel, classifyAnthropicError, classifyClaudeCliFailure, cliShouldFallBack, collectClaudeFailure, fallbackWarning, newFallbackState, type ClaudeCliFailure, onceRestore, renderFallback, RETRY_NOTE, retryPrompt, shortError, triggersFallback } from "../src/provider/fallback.js";
 
 test("estado novo: principal = modelo inicial, inativo", () => {
   assert.deepEqual(newFallbackState("claude-opus-5-5"), { primary: "claude-opus-5-5", active: false });
@@ -179,4 +179,24 @@ test("collectClaudeFailure ignora subagentes e resultados sem erro", () => {
   collectClaudeFailure(f, { type: "assistant", parent_tool_use_id: "p", error: "rate_limit", message: { content: [] } });
   collectClaudeFailure(f, { type: "result", is_error: false, result: "ok" });
   assert.deepEqual(f, { stderr: "", code: 1 });
+});
+
+test("claude CLI → qwen: só troca com falha elegível, fallback pronto, ainda não usado e sem interrupção", () => {
+  const ready = { ready: true as const, name: "qwen" as const, label: "Qwen" };
+  const off = { ready: false as const, reason: "sem chave" };
+  const s = newFallbackState("claude-opus-5-5");
+  assert.equal(cliShouldFallBack({ kind: "quota" }, s, ready), true);
+  assert.equal(cliShouldFallBack({ kind: "auth" }, s, ready), true);
+  assert.equal(cliShouldFallBack({ kind: "other" }, s, ready), false);
+  assert.equal(cliShouldFallBack(null, s, ready), false); // turno ok ou interrompido
+  assert.equal(cliShouldFallBack({ kind: "quota" }, s, off), false);
+  assert.equal(cliShouldFallBack({ kind: "quota" }, s, ready, true), false);
+  activateFallback(s, "quota (limite)");
+  assert.equal(cliShouldFallBack({ kind: "quota" }, s, ready), false); // uma troca por sessão
+});
+
+test("pedido refeito no qwen vem com a nota; aviso da troca é o mesmo nos dois motores", () => {
+  assert.equal(retryPrompt("rode os testes"), `${RETRY_NOTE}\n\nrode os testes`);
+  assert.match(RETRY_NOTE, /sem refazer ações já concluídas/);
+  assert.equal(fallbackWarning("quota", "5-hour limit reached", "Qwen 27B"), "⚠ Claude falhou (quota: 5-hour limit reached) — seguindo com Qwen 27B. /fallback para detalhes, /model <claude> para voltar.");
 });

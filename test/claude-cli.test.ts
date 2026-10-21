@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
-import { ClaudeSession, ORPHAN_RESULT, recordStreamEvent, turnsToMessages } from "../src/agent/claude-cli.js";
+import { ClaudeSession, historyForFallback, ORPHAN_RESULT, recordStreamEvent, turnsToMessages } from "../src/agent/claude-cli.js";
 import type { TurnSink } from "../src/agent/sink.js";
 import { MCP_PREFIX } from "../src/mcp/server.js";
 import { renderTranscript, shouldReflect } from "../src/skills/learn.js";
@@ -216,4 +216,25 @@ test("switchableBackend: swap soma usage/custo dos motores e mantém os comandos
   assert.deepEqual(b.usage(), { input: 140, output: 14, cacheRead: 50 });
   await b.close();
   assert.deepEqual(ran.at(-1), "close:claude");
+});
+
+test("historyForFallback: pedido do turno que caiu sem nada some (volta com a nota); com trabalho feito, fica", () => {
+  const [ok, caiu] = twoTurns();
+  const vazio: TurnRecord = { messages: [{ role: "user", content: "pedido que caiu" }], toolCalls: 0, errors: 0, finished: false };
+  assert.deepEqual(historyForFallback([ok, vazio]), turnsToMessages([ok]));
+  assert.deepEqual(historyForFallback([ok, caiu]), turnsToMessages([ok, caiu]));
+  assert.deepEqual(historyForFallback([]), []);
+});
+
+test("troca no meio da sessão: a sessão do claude caiu por limite → histórico herdado + pedido refeito", async () => {
+  const sb = sandbox();
+  try {
+    const s = fakeSession(sb.root, "usage-limit-5h");
+    assert.equal(await s.send("rode os testes"), false);
+    assert.equal(s.lastFailure?.kind, "quota");
+    // a mensagem sintética do limite não vira fala do modelo; o turno que caiu fica só com o pedido
+    assert.deepEqual(s.allTurns[0].messages, [{ role: "user", content: "rode os testes" }]);
+    // e o pedido some do histórico herdado: volta inteiro com a nota
+    assert.deepEqual(historyForFallback(s.allTurns), []);
+  } finally { sb.cleanup(); }
 });

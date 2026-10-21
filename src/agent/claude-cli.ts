@@ -77,6 +77,15 @@ export function turnsToMessages(turns: TurnRecord[]): Msg[] {
   return out;
 }
 
+/**
+ * Histórico que o qwen herda na troca: todos os turnos, menos o pedido do turno que caiu quando ele não chegou a
+ * produzir nada (o pedido volta logo em seguida, com a nota de `retryPrompt`, e ficaria duplicado).
+ */
+export function historyForFallback(turns: TurnRecord[]): Msg[] {
+  const failed = turns.at(-1);
+  return turnsToMessages(failed && failed.messages.length <= 1 ? turns.slice(0, -1) : turns);
+}
+
 /** Agentes do Brito viram subagentes do claude (--agents), no lugar do `delegate`. */
 function claudeAgents(): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -96,7 +105,8 @@ function claudeAgents(): Record<string, unknown> {
  * Só a thread principal entra: mensagens de subagentes (`parent_tool_use_id`) têm contexto próprio.
  */
 export function recordStreamEvent(turn: TurnRecord, ev: any, loadedSkills: Set<string>) {
-  if (ev?.parent_tool_use_id) return;
+  // A mensagem sintética de erro ("5-hour limit reached"…) não é fala do modelo: o qwen a herdaria como resposta.
+  if (ev?.parent_tool_use_id || ev?.is_api_error_message) return;
   if (ev?.type === "assistant") {
     const rec: any[] = [];
     for (const b of ev.message?.content ?? []) {
