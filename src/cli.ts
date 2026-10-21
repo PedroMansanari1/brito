@@ -18,7 +18,7 @@ import { Agent } from "./agent/loop.js";
 import { EFFORTS, MODEL_ALIASES, modelHelp, effortLabel, initialEffort, initialModel, loadProfiles, isEffort, loadReasoningDisplay, parseModelArgs, saveEffort, saveModel, saveReasoningDisplay, type Effort, type ModelScope } from "./model.js";
 import { hasClaudeCli, ClaudeSession } from "./agent/claude-cli.js";
 import { fallbackStatus, learnerModel, pickEngine } from "./engine.js";
-import { chooseModel, newFallbackState, renderFallback, type FallbackState } from "./provider/fallback.js";
+import { chooseModel, newFallbackState, onceRestore, renderFallback, type FallbackState } from "./provider/fallback.js";
 import { compactAtFor, contextWindowFor, resolveModel } from "./provider/resolve.js";
 import { startApprovalServer } from "./agent/approval.js";
 import { serveMcp } from "./mcp/server.js";
@@ -230,7 +230,8 @@ function fallbackCommand(state: FallbackState, live: () => string, engine: (mode
 function modelCommand(get: () => string, set: (m: string) => void, note: string, veto: (m: string) => string | null = () => null) {
   let restore: string | null = null;
   return {
-    restoreOnce: () => { if (restore !== null) { set(restore); restore = null; } },
+    /** `fallbackActive`: a troca automática aconteceu no turno; desfazer o `--once` levaria de volta ao Claude que caiu. */
+    restoreOnce: (fallbackActive = false) => { const r = onceRestore(restore, fallbackActive); restore = null; if (r !== null) set(r); },
     cmd: {
       desc: "mostra/troca o modelo (--global grava, --once só o próximo turno)",
       run: async (args: string[]) => {
@@ -449,8 +450,9 @@ program
     if (o.yes) perms.mode = "bypass";
     const io = { ask: async (q: string, _opts?: { force?: boolean }) => perms.mode === "bypass" || plainAsk(q) };
     const ctx: ToolContext = { root, graph, ask: (q, opts) => io.ask(q, opts), sync, dirty: false, loadedSkills: new Set() };
+    const fallback = newFallbackState(startModel);
     // Função: o índice de skills e a contagem do grafo são relidos a cada passo e refletem o que mudou na sessão.
-    const agent = new Agent(() => buildSystemPrompt(root, graphStatsLine(symCount, noteCount, "now"), skillsIndex(root)) + (perms.mode === "plan" ? PLAN_NOTE : ""), ctx, { model: startModel });
+    const agent = new Agent(() => buildSystemPrompt(root, graphStatsLine(symCount, noteCount, "now"), skillsIndex(root)) + (perms.mode === "plan" ? PLAN_NOTE : ""), ctx, { model: startModel, fallback });
     ctx.model = () => agent.model; // subagentes seguem o modelo vivo
     ui.reasoning = loadReasoningDisplay();
     const learnModel = () => learnerModel(agent.model, process.env);
@@ -474,7 +476,6 @@ program
       return;
     }
 
-    const fallback = newFallbackState(agent.model);
     const modelCmd = modelCommand(() => agent.model, (m) => { agent.model = m; chooseModel(fallback, m); }, "(troque com /model; subagentes explore usam BRITO_EXPLORE_MODEL)");
     const backend: ReplBackend = {
       model: () => agent.model,
@@ -483,7 +484,7 @@ program
       get ctxWindow() { return contextWindowFor(agent.model); },
       cost: () => (Number.isFinite(PRICE_IN) && Number.isFinite(PRICE_OUT) ? (agent.usage.input * PRICE_IN + agent.usage.output * PRICE_OUT) / 1e6 : undefined),
       turn,
-      afterTurn: async () => { modelCmd.restoreOnce(); await learn(); },
+      afterTurn: async () => { modelCmd.restoreOnce(fallback.active); await learn(); },
       reset: () => { agent.messages = []; agent.contextTokens = 0; agent.recentTurns = []; agent.lastTurn = null; },
       onShell: () => { ctx.dirty = true; }, // `!cmd` pode ter mudado o código
       commands: {
