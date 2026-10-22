@@ -430,8 +430,11 @@ async function buildApiBackend(root: string, model: string, io: { ask: (q: strin
     },
     close: async () => { await graph.close(); },
   };
-  return { backend, agent, learn, symbols: () => symCount, notes: noteCount };
+  return { backend, agent, graph, learn, symbols: () => symCount, notes: noteCount };
 }
+
+/** `--once` não troca de motor: o turno seguinte rodaria no outro motor e a volta exigiria trocar de novo. */
+const onceNoSwitch = (m: string) => `o ${m} roda no claude CLI: --once não troca de motor; use /model ${m}`;
 
 type ApiBackend = Awaited<ReturnType<typeof buildApiBackend>>;
 type Io = { ask: (q: string, opts?: { force?: boolean }) => Promise<boolean> };
@@ -443,10 +446,11 @@ let approvalServer: ReturnType<typeof startApprovalServer> | null = null;
  * Motor claude CLI. `sw` é o backend do REPL: `/model <perfil>` troca para o modo API (com a conversa do claude) e
  * `/model <claude>` lá volta para cá. Também serve ao prompt único, que não troca de motor pelo `/model`.
  */
-async function buildClaudeBackend(root: string, io: Io, sw: () => SwitchableBackend, model?: string) {
+async function buildClaudeBackend(root: string, io: Io, sw: () => SwitchableBackend, model?: string, openGraph?: GraphStore) {
   approvalServer ??= startApprovalServer({ ask: (q, opts) => io.ask(q, opts) });
   // O banco aceita um único processo com acesso de escrita: indexa, lê as stats e solta o banco para o servidor MCP.
-  const graph = await GraphStore.open(root);
+  // `openGraph`: o do modo API, que é fechado aqui só depois de indexar (se falhar antes, continua aberto para ele).
+  const graph = openGraph ?? await GraphStore.open(root);
   ui.info("sincronizando grafo…");
   await indexProject(root, graph);
   const [{ n: syms }] = await graph.run("MATCH (s:Symbol) RETURN count(s) AS n");
@@ -477,6 +481,7 @@ async function buildClaudeBackend(root: string, io: Io, sw: () => SwitchableBack
         messages: historyForFallback(session.allTurns), graph: await openGraphAfterClaude(root), ...opts,
         divert: async (m, scope) => {
           if (resolveModel(m).kind !== "anthropic") return false;
+          if (scope === "once") { ui.warn(onceNoSwitch(m)); return true; }
           sw().swap(backend);
           await api!.backend.close();
           session.handoff(api!.agent.unsentTurns.splice(0), api!.agent.model);
@@ -631,8 +636,11 @@ program
     let claude: Awaited<ReturnType<typeof buildClaudeBackend>> | null = null;
     if (hasClaudeCli()) opening.divert = async (m, scope) => {
       if (resolveModel(m).kind !== "anthropic" || process.env.ANTHROPIC_API_KEY?.trim()) return false;
-      await sw.current().close(); // solta o grafo para o servidor MCP do claude
-      try { claude ??= await buildClaudeBackend(root, io, () => sw); }
+      if (scope === "once") { ui.warn(onceNoSwitch(m)); return true; }
+      // Indexa com o grafo ainda aberto e só o solta (para o servidor MCP do claude) se tudo deu certo: numa falha,
+      // a sessão segue no modo API com o grafo vivo.
+      if (claude) await api.backend.close();
+      else try { claude = await buildClaudeBackend(root, io, () => sw, undefined, api.graph); }
       catch (e: any) { ui.error(`não consegui abrir o claude CLI: ${e?.message ?? e}`); return true; }
       sw.swap(claude.backend);
       claude.session.handoff(api.agent.unsentTurns.splice(0), api.agent.model);

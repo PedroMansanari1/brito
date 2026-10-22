@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "node:fs";
 import path from "node:path";
-import { activateFallback, chooseModel, classifyAnthropicError, classifyClaudeCliFailure, cliShouldFallBack, collectClaudeFailure, fallbackWarning, newFallbackState, type ClaudeCliFailure, onceRestore, renderFallback, RETRY_NOTE, retryPrompt, shortError, triggersFallback } from "../src/provider/fallback.js";
+import { activateFallback, chooseModel, classifyAnthropicError, classifyClaudeCliFailure, cliShouldFallBack, collectClaudeFailure, fallbackWarning, newFallbackState, type ClaudeCliFailure, onceRestore, renderFallback, RESUMED_NOTE, RETRY_NOTE, retryPrompt, shortError, triggersFallback } from "../src/provider/fallback.js";
 
 test("estado novo: principal = modelo inicial, inativo", () => {
   assert.deepEqual(newFallbackState("claude-opus-5-5"), { primary: "claude-opus-5-5", active: false });
@@ -197,6 +197,7 @@ test("claude CLI → qwen: só troca com falha elegível, fallback pronto, ainda
 
 test("pedido refeito no qwen vem com a nota; aviso da troca é o mesmo nos dois motores", () => {
   assert.equal(retryPrompt("rode os testes"), `${RETRY_NOTE}\n\nrode os testes`);
+  assert.equal(retryPrompt("rode os testes", true), `${RETRY_NOTE}\n${RESUMED_NOTE}\n\nrode os testes`);
   assert.match(RETRY_NOTE, /sem refazer ações já concluídas/);
   assert.equal(fallbackWarning("quota", "5-hour limit reached", "Qwen 27B"), "⚠ Claude falhou (quota: 5-hour limit reached) — seguindo com Qwen 27B. /fallback para detalhes, /model <claude> para voltar.");
 });

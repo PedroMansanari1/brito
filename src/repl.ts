@@ -72,7 +72,8 @@ export function switchableBackend(initial: ReplBackend): SwitchableBackend {
     },
     turn: (text, signal) => cur.turn(text, signal),
     abort: () => cur.abort?.(),
-    reset: () => cur.reset(),
+    // Todos os motores: o claude CLI fora de uso guarda a sessão (--resume) e os turnos que o fallback herdaria.
+    reset: () => { for (const b of seen) b.reset(); },
     afterTurn: async () => { await cur.afterTurn?.(); },
     onShell: () => cur.onShell?.(),
     commands,

@@ -203,7 +203,7 @@ test("allTurns guarda todos os turnos; recentTurns só 3; reset zera os dois", a
 function fakeBackend(model: string, usage: { input: number; output: number; cacheRead?: number }, cost: number | undefined, commands: string[], ran: string[]): ReplBackend {
   return {
     model: () => model, contextTokens: () => 0, usage: () => usage, ctxWindow: 1000, cost: () => cost,
-    turn: async () => { ran.push(`turn:${model}`); return true; }, reset: () => {}, close: async () => { ran.push(`close:${model}`); },
+    turn: async () => { ran.push(`turn:${model}`); return true; }, reset: () => { ran.push(`reset:${model}`); }, close: async () => { ran.push(`close:${model}`); },
     commands: Object.fromEntries(commands.map((n) => [n, { desc: `${n} (${model})`, run: async () => { ran.push(`${n}:${model}`); } }])),
   };
 }
@@ -230,6 +230,15 @@ test("switchableBackend: swap soma usage/custo dos motores e mantém os comandos
   assert.deepEqual(b.usage(), { input: 140, output: 14, cacheRead: 50 });
   await b.close();
   assert.deepEqual(ran.at(-1), "close:claude");
+});
+
+test("switchableBackend: /clear limpa todos os motores, não só o atual", () => {
+  const ran: string[] = [];
+  const b = switchableBackend(fakeBackend("claude", { input: 0, output: 0 }, undefined, [], ran));
+  b.swap(fakeBackend("qwen", { input: 0, output: 0 }, undefined, [], ran));
+  b.reset();
+  // o claude fora de uso retomaria (--resume) a conversa limpa e a entregaria ao qwen numa nova troca
+  assert.deepEqual(ran, ["reset:claude", "reset:qwen"]);
 });
 
 test("historyForFallback: pedido do turno que caiu sem nada some (volta com a nota); com trabalho feito, fica", () => {

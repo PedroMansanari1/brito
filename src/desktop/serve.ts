@@ -79,7 +79,11 @@ interface ApiEngineOpts {
   effort?: string;
   loadedSkills?: Set<string>;
   /** motor claude CLI de onde veio a troca: `config` com um Claude volta para ele */
-  back?: { engine: Engine; costUsd: () => number; handoff: (turns: TurnRecord[], label: string) => void };
+  back?: {
+    engine: Engine; costUsd: () => number; handoff: (turns: TurnRecord[], label: string) => void;
+    /** o claude espera este fechamento do grafo antes do próximo pedido (o servidor MCP dele abre o mesmo banco) */
+    release: (closing: Promise<void>) => void;
+  };
 }
 
 export async function serveDesktop(root: string, resumeId?: string): Promise<void> {
@@ -141,8 +145,8 @@ export async function serveDesktop(root: string, resumeId?: string): Promise<voi
           if (o.back) {
             engine = o.back.engine;
             engine.setModel(m);
-            chooseModel(fallback, engine.model);
-            graph.close().catch(() => {});
+            if (!m) chooseModel(fallback, target); // com m vazio o claude não escolhe (o modelo dele vira o placeholder)
+            o.back.release(graph.close().catch(() => {}));
             o.back.handoff(agent.unsentTurns.splice(0), agent.model);
             sink.info("de volta ao claude CLI: o que foi feito no qwen segue no próximo pedido");
           } else if (m) sink.warn(`o ${m} precisa de ANTHROPIC_API_KEY (ou do claude CLI); seguindo no ${agent.model}`);
@@ -158,7 +162,10 @@ export async function serveDesktop(root: string, resumeId?: string): Promise<voi
         try { await agent.send(text, ac.signal); } catch (e: any) { ok = false; ac.signal.aborted ? sink.warn("⏹ interrompido") : sink.error(e?.message ?? String(e)); } finally { sink.turnEnd(ok); ac = null; }
       },
       abort: () => ac?.abort(),
-      reset: () => { agent.messages = []; agent.contextTokens = 0; agent.recentTurns = []; agent.unsentTurns = []; agent.lastTurn = null; },
+      reset: () => {
+        agent.messages = []; agent.contextTokens = 0; agent.recentTurns = []; agent.unsentTurns = []; agent.lastTurn = null;
+        o.back?.engine.reset(); // senão a volta ao claude retomaria (--resume) a conversa limpa
+      },
       stats: () => ({ usage: agent.usage, contextTokens: agent.contextTokens, contextWindow: contextWindowFor(agent.model), costUsd: o.back?.costUsd() ?? 0 }),
       close: async () => { await graph.close(); },
     } as Engine;
@@ -192,8 +199,11 @@ export async function serveDesktop(root: string, resumeId?: string): Promise<voi
       env: process.versions.electron || process.env.ELECTRON_RUN_AS_NODE ? { ELECTRON_RUN_AS_NODE: "1" } : undefined,
     });
     if (resumeId) session.resume(resumeId);
+    let resumed = !!resumeId; // até o primeiro reset
     session.effort = initialEffort();
     const fallback = newFallbackState(session.requestedModel || session.model);
+    /** Fechamento do grafo do modo API na volta para cá (ver `back.release`). */
+    let graphReleased: Promise<void> = Promise.resolve();
     const claude = {
       kind: "claude", fallback,
       get sessionId() { return session.sessionId; },
@@ -202,26 +212,32 @@ export async function serveDesktop(root: string, resumeId?: string): Promise<voi
       engineLabel: () => "claude CLI · assinatura",
       setModel: (m) => { session.requestedModel = m; session.model = m || "claude (assinatura)"; if (m) chooseModel(fallback, m); },
       send: async (text) => {
+        await graphReleased;
         if (await session.send(text)) return;
         // Caiu por conta/capacidade: monta o loop próprio no qwen com a conversa do claude e refaz o pedido nele.
         const status = fallbackStatus(fallback.primary, process.env);
         const f = session.lastFailure;
         if (!f || !status.ready || !cliShouldFallBack(f, fallback, status)) return;
         sink.warn(fallbackWarning(f.kind, f.message, status.label));
+        // `resume` só reaproveita o id: o que veio antes da reabertura está na sessão do claude, não em `allTurns`.
+        if (resumed) sink.warn(`a conversa anterior à reabertura ficou no claude CLI: o ${status.label} herda só o que foi dito desde então`);
         let api: Engine;
         try {
           api = await buildApiEngine(status.name, {
             fallback, engineLabel: () => "claude CLI · assinatura", messages: historyForFallback(session.allTurns),
-            effort: session.effort, loadedSkills: session.loadedSkills, back: { engine: claude, costUsd: () => session.costUsd, handoff: (turns, label) => session.handoff(turns, label) },
+            effort: session.effort, loadedSkills: session.loadedSkills, back: {
+              engine: claude, costUsd: () => session.costUsd, handoff: (turns, label) => session.handoff(turns, label),
+              release: (closing) => { graphReleased = closing; },
+            },
           });
         } catch (e: any) { sink.error(`não consegui abrir o ${status.label}: ${e?.message ?? e}`); return; }
         activateFallback(fallback, `${f.kind} (${f.message})`);
         engine = api;
         ready();
-        await api.send(retryPrompt(text));
+        await api.send(retryPrompt(text, resumed));
       },
       abort: () => session.abort(),
-      reset: () => session.reset(),
+      reset: () => { session.reset(); resumed = false; },
       stats: () => ({ usage: session.usage, contextTokens: session.contextTokens, contextWindow: session.contextWindow, costUsd: session.costUsd }),
       close: async () => {},
     } as Engine;

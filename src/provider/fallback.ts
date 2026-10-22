@@ -136,7 +136,9 @@ export function cliShouldFallBack(failure: { kind: FailureKind } | null, state: 
 
 /** Nota que precede o pedido refeito no qwen depois da troca de motor (spec §5.5). */
 export const RETRY_NOTE = "[O modelo anterior (Claude) falhou no meio deste pedido. O que já foi feito está no histórico acima; continue de onde parou sem refazer ações já concluídas.]";
-export const retryPrompt = (text: string) => `${RETRY_NOTE}\n\n${text}`;
+/** Sessão retomada (app reaberto): o que veio antes da reabertura ficou no claude CLI e não está no histórico. */
+export const RESUMED_NOTE = "[A conversa anterior à reabertura da sessão não foi herdada: só o que veio depois dela está no histórico. Se faltar contexto, pergunte ao usuário em vez de supor.]";
+export const retryPrompt = (text: string, resumed = false) => `${RETRY_NOTE}${resumed ? `\n${RESUMED_NOTE}` : ""}\n\n${text}`;
 
 /**
  * Modelo a devolver depois de um turno com `/model --once`. O `--once` zera o fallback, então `active` no fim do turno
