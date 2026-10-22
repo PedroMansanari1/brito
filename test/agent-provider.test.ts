@@ -7,7 +7,9 @@ import "../src/tools/fs.js";
 import { Agent } from "../src/agent/loop.js";
 import { summarizeMiddle } from "../src/agent/context.js";
 import { defaultComplete } from "../src/skills/learn.js";
+import Anthropic from "@anthropic-ai/sdk";
 import { setProviderFactory } from "../src/provider/index.js";
+import { activateFallback, newFallbackState } from "../src/provider/fallback.js";
 import type { ModelMessage, ModelProvider, ModelRequest, SendHooks } from "../src/provider/types.js";
 import type { TurnSink } from "../src/agent/sink.js";
 import { sandbox } from "./helpers.js";
@@ -31,7 +33,7 @@ function silentSink(log: string[] = []): TurnSink {
   return { turnStart: noop, turnEnd: noop, text: noop, textEnd: noop, thinking: noop, toolStart: noop, toolEnd: noop, info: (m) => log.push(m), warn: (m) => log.push(m), error: (m) => log.push(m) };
 }
 
-afterEach(() => { setProviderFactory(null); delete process.env.BRITO_CONFIG; });
+afterEach(() => { setProviderFactory(null); delete process.env.BRITO_CONFIG; delete process.env.BRITO_TESTE_KEY; });
 
 test("agente roda turno com tool pelo provedor", async () => {
   const sb = sandbox();
@@ -151,5 +153,111 @@ test("perfil com raciocínio ligado ganha orçamento maior de tokens", async () 
   agent.model = "sonnet";
   await agent.send("3");
   assert.deepEqual(reqs.map((r) => r.maxTokens), [16384, 8192, 8192]);
+  sb.cleanup();
+});
+
+const apiErr = (status: number, type: string, message = "x") =>
+  Anthropic.APIError.generate(status, { type: "error", error: { type, message } }, message, new Headers());
+
+/** Claude e qwen falsos separados: o Claude devolve/lança na ordem; o qwen grava as requisições. */
+function claudeEQwen(claude: (ModelMessage | Error)[], qwen: ModelMessage[]) {
+  const reqs: { kind: string; req: ModelRequest }[] = [];
+  setProviderFactory((r) => ({
+    kind: r.kind,
+    async send(req) {
+      reqs.push({ kind: r.kind, req: structuredClone(req) });
+      const next = (r.kind === "anthropic" ? claude : qwen).shift();
+      if (!next) throw new Error("sem resposta");
+      if (next instanceof Error) throw next;
+      return next;
+    },
+  }));
+  return reqs;
+}
+
+function comFallback(sb: ReturnType<typeof sandbox>) {
+  perfilQwen(sb.home);
+  process.env.BRITO_TESTE_KEY = "k";
+  const log: string[] = [];
+  const fallback = newFallbackState("sonnet");
+  const agent = new Agent("SYS", sb.ctx, { model: "sonnet", sink: silentSink(log), log: (m) => log.push(m), fallback });
+  return { agent, fallback, log };
+}
+
+test("fallback: 429 no Claude repete o mesmo passo no qwen com o histórico idêntico", async () => {
+  const sb = sandbox();
+  const reqs = claudeEQwen([glob(), apiErr(429, "rate_limit_error", "Too Many Requests")], [text("feito no qwen")]);
+  const { agent, fallback, log } = comFallback(sb);
+  assert.equal(await agent.send("x"), "feito no qwen");
+  assert.deepEqual(reqs.map((r) => r.kind), ["anthropic", "anthropic", "openai"]);
+  assert.deepEqual(reqs[2].req.messages, reqs[1].req.messages); // mesmo passo: nada entrou nem saiu do histórico
+  assert.equal(reqs[2].req.model, "qwen");
+  assert.equal(agent.model, "qwen");
+  assert.equal(fallback.active, true);
+  assert.equal(fallback.primary, "sonnet");
+  assert.match(fallback.reason!, /^rate_limit \(429/);
+  assert.ok(log.some((l) => /Claude falhou \(rate_limit: .*\) — seguindo com Qwen\. \/fallback para detalhes/.test(l)), log.join(" | "));
+  sb.cleanup();
+});
+
+test("fallback: troca uma vez só; nova falha depois de ativo é erro normal", async () => {
+  const sb = sandbox();
+  claudeEQwen([apiErr(529, "overloaded_error")], []);
+  const { agent, fallback } = comFallback(sb);
+  activateFallback(fallback, "anterior", 1);
+  await assert.rejects(agent.send("x"), /overloaded|529/);
+  assert.equal(agent.model, "sonnet");
+  assert.equal(fallback.reason, "anterior");
+  sb.cleanup();
+});
+
+test("fallback: 400 de validação não troca", async () => {
+  const sb = sandbox();
+  claudeEQwen([apiErr(400, "invalid_request_error", "messages: tool_use sem tool_result")], [text("não deveria")]);
+  const { agent, fallback } = comFallback(sb);
+  await assert.rejects(agent.send("x"), /tool_use sem tool_result/);
+  assert.equal(agent.model, "sonnet");
+  assert.equal(fallback.active, false);
+  sb.cleanup();
+});
+
+test("fallback: Ctrl+C não troca", async () => {
+  const sb = sandbox();
+  perfilQwen(sb.home);
+  process.env.BRITO_TESTE_KEY = "k";
+  const ac = new AbortController();
+  setProviderFactory((r) => ({
+    kind: r.kind,
+    send: (_req, hooks) => new Promise((_, reject) => {
+      hooks?.signal?.addEventListener("abort", () => reject(new Anthropic.APIUserAbortError()));
+      setTimeout(() => ac.abort(), 10);
+    }),
+  }));
+  const fallback = newFallbackState("sonnet");
+  const agent = new Agent("SYS", sb.ctx, { model: "sonnet", sink: silentSink(), fallback });
+  await assert.rejects(agent.send("x", ac.signal), /interrompido/);
+  assert.equal(agent.model, "sonnet");
+  assert.equal(fallback.active, false);
+  sb.cleanup();
+});
+
+test("fallback: sem chave do qwen não troca", async () => {
+  const sb = sandbox();
+  claudeEQwen([apiErr(429, "rate_limit_error")], [text("não deveria")]);
+  const { agent, fallback } = comFallback(sb);
+  delete process.env.BRITO_TESTE_KEY;
+  await assert.rejects(agent.send("x"));
+  assert.equal(fallback.active, false);
+  sb.cleanup();
+});
+
+test("fallback: sem estado (subagente) a falha é erro normal", async () => {
+  const sb = sandbox();
+  perfilQwen(sb.home);
+  process.env.BRITO_TESTE_KEY = "k";
+  claudeEQwen([apiErr(429, "rate_limit_error")], [text("não deveria")]);
+  const agent = new Agent("SYS", sb.ctx, { model: "sonnet", sink: silentSink() });
+  await assert.rejects(agent.send("x"));
+  assert.equal(agent.model, "sonnet");
   sb.cleanup();
 });

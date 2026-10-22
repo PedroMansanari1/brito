@@ -35,7 +35,8 @@ export function toChatMessages(system: string, msgs: Msg[], vision: boolean): { 
       else if (b.type === "text") parts.push({ type: "text", text: b.text });
       else if (b.type === "image" && b.source.type === "base64") {
         if (vision) parts.push({ type: "image_url", image_url: { url: `data:${b.source.media_type};base64,${b.source.data}` } });
-        else droppedImages++;
+        // Sem visão a imagem vira um marcador: o modelo sabe que havia uma (ex.: histórico herdado do Claude no fallback).
+        else { droppedImages++; parts.push({ type: "text", text: "[imagem omitida]" }); }
       }
     }
     if (!parts.length) continue;

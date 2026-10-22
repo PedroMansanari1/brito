@@ -35,8 +35,13 @@ test("imagem é omitida sem vision e vira image_url com vision", () => {
   const msgs = [{ role: "user" as const, content: [{ type: "image" as const, source: { type: "base64" as const, media_type: "image/png" as const, data: "AAA" } }, { type: "text" as const, text: "veja" }] }];
   const sem = toChatMessages("S", msgs, false);
   assert.equal(sem.droppedImages, 1);
-  assert.deepEqual(sem.messages[1], { role: "user", content: "veja" });
+  assert.deepEqual(sem.messages[1], { role: "user", content: "[imagem omitida]\nveja" });
   assert.deepEqual(toChatMessages("S", msgs, true).messages[1], { role: "user", content: [{ type: "image_url", image_url: { url: "data:image/png;base64,AAA" } }, { type: "text", text: "veja" }] });
+});
+
+test("mensagem só com imagem sem vision não some do histórico", () => {
+  const msgs = [{ role: "user" as const, content: [{ type: "image" as const, source: { type: "base64" as const, media_type: "image/png" as const, data: "AAA" } }] }];
+  assert.deepEqual(toChatMessages("S", msgs, false).messages[1], { role: "user", content: "[imagem omitida]" });
 });
 
 test("tools no formato function", () => {
