@@ -47,6 +47,8 @@ export class Agent {
   lastTurn: TurnRecord | null = null;
   /** últimos turnos (o mais novo por último): o anterior dá contexto a correções do usuário */
   recentTurns: TurnRecord[] = [];
+  /** turnos ainda não entregues ao claude CLI: na volta para ele, viram o contexto do próximo prompt (`handoff`) */
+  unsentTurns: TurnRecord[] = [];
   private maxSteps: number;
   private log: (s: string) => void;
   private ui: TurnSink;
@@ -80,6 +82,7 @@ export class Agent {
     const turn: TurnRecord = { messages: [], toolCalls: 0, errors: 0, finished: false };
     this.lastTurn = turn;
     this.recentTurns = [...this.recentTurns, turn].slice(-3);
+    this.unsentTurns.push(turn);
     const push = (m: Anthropic.MessageParam) => { this.messages.push(m); turn.messages.push(m); };
     // Imagens arrastadas para o terminal chegam como caminhos no texto: anexa como blocos `image`. O registro do turno
     // (usado na reflexão) guarda só o texto, para não carregar base64.

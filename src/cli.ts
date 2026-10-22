@@ -409,7 +409,7 @@ async function buildApiBackend(root: string, model: string, io: { ask: (q: strin
     cost: () => (Number.isFinite(PRICE_IN) && Number.isFinite(PRICE_OUT) ? (agent.usage.input * PRICE_IN + agent.usage.output * PRICE_OUT) / 1e6 : undefined),
     turn,
     afterTurn: async () => { modelCmd.restoreOnce(fallback.active); await learn(); },
-    reset: () => { agent.messages = []; agent.contextTokens = 0; agent.recentTurns = []; agent.lastTurn = null; },
+    reset: () => { agent.messages = []; agent.contextTokens = 0; agent.recentTurns = []; agent.unsentTurns = []; agent.lastTurn = null; },
     onShell: () => { ctx.dirty = true; }, // `!cmd` pode ter mudado o código
     commands: {
       "/model": modelCmd.cmd,
@@ -479,7 +479,8 @@ async function buildClaudeBackend(root: string, io: Io, sw: () => SwitchableBack
           if (resolveModel(m).kind !== "anthropic") return false;
           sw().swap(backend);
           await api!.backend.close();
-          ui.info("de volta ao claude CLI: a conversa do claude não inclui o que foi feito no modo API");
+          session.handoff(api!.agent.unsentTurns.splice(0), api!.agent.model);
+          ui.info("de volta ao claude CLI: o que foi feito no modo API segue no próximo pedido");
           await modelCmd.cmd.run([m, `--${scope}`]);
           return true;
         },
@@ -626,7 +627,7 @@ program
     }
     let sw!: SwitchableBackend;
     // Sem ANTHROPIC_API_KEY o Claude só roda no claude CLI: `/model <claude>` troca o motor em vez de recusar.
-    // A conversa feita aqui não passa para o claude; o claude CLI aberto é reaproveitado nas voltas seguintes.
+    // A conversa feita aqui vai junto (`handoff`); o claude CLI aberto é reaproveitado nas voltas seguintes.
     let claude: Awaited<ReturnType<typeof buildClaudeBackend>> | null = null;
     if (hasClaudeCli()) opening.divert = async (m, scope) => {
       if (resolveModel(m).kind !== "anthropic" || process.env.ANTHROPIC_API_KEY?.trim()) return false;
@@ -634,7 +635,8 @@ program
       try { claude ??= await buildClaudeBackend(root, io, () => sw); }
       catch (e: any) { ui.error(`não consegui abrir o claude CLI: ${e?.message ?? e}`); return true; }
       sw.swap(claude.backend);
-      ui.info("modo claude CLI: usa o login da sua conta; a conversa feita no modo API não passa para o claude");
+      claude.session.handoff(api.agent.unsentTurns.splice(0), api.agent.model);
+      ui.info("modo claude CLI: usa o login da sua conta; a conversa feita no modo API segue no próximo pedido");
       await claude.modelCmd.cmd.run([m, `--${scope}`]);
       return true;
     };

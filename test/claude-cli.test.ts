@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
-import { ClaudeSession, historyForFallback, ORPHAN_RESULT, recordStreamEvent, turnsToMessages } from "../src/agent/claude-cli.js";
+import { ClaudeSession, handoffNote, historyForFallback, ORPHAN_RESULT, recordStreamEvent, turnsToMessages } from "../src/agent/claude-cli.js";
 import type { TurnSink } from "../src/agent/sink.js";
 import { MCP_PREFIX } from "../src/mcp/server.js";
 import { renderTranscript, shouldReflect } from "../src/skills/learn.js";
@@ -250,5 +250,47 @@ test("troca no meio da sessão: a sessão do claude caiu por limite → históri
     assert.deepEqual(s.allTurns[0].messages, [{ role: "user", content: "rode os testes" }]);
     // e o pedido some do histórico herdado: volta inteiro com a nota
     assert.deepEqual(historyForFallback(s.allTurns), []);
+  } finally { sb.cleanup(); }
+});
+
+/** Turno do modo API (nomes de tool do Brito), como o `Agent` grava. */
+const apiTurn = (ask: string, answer: string): TurnRecord => ({
+  messages: [
+    { role: "user", content: ask },
+    { role: "assistant", content: [{ type: "tool_use", id: "q1", name: "edit_file", input: { path: "a.ts" } }] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "q1", content: "editado" }] },
+    { role: "assistant", content: [{ type: "text", text: answer }] },
+  ],
+  toolCalls: 1, errors: 0, finished: true,
+});
+
+test("handoffNote: turnos do modo API viram contexto em ordem; os mais antigos saem se não couber", () => {
+  const note = handoffNote([apiTurn("corrige o bug", "corrigi em a.ts")], "qwen");
+  assert.match(note, /seguiu no qwen/);
+  assert.match(note, /USUÁRIO: corrige o bug\n→ edit_file\(\{"path":"a.ts"\}\)\n← editado\nAGENTE: corrigi em a.ts/);
+  assert.match(note, /Pedido atual:\]\n\n$/);
+  assert.equal(handoffNote([], "qwen"), "");
+  const cut = handoffNote([apiTurn("velho", "x"), apiTurn("novo", "y")], "qwen", 120);
+  assert.doesNotMatch(cut, /velho/);
+  assert.match(cut, /novo/);
+  assert.match(cut, /1 turno\(s\) mais antigo\(s\) omitido/);
+});
+
+test("handoff: o próximo prompt do claude leva o que foi feito no qwen, uma vez só; allTurns também", async () => {
+  const sb = sandbox();
+  try {
+    const s = fakeSession(sb.root, "usage-limit-hit");
+    const prompts: string[] = [];
+    const base = (s as any).o.command;
+    (s as any).o.command = (args: string[]) => { prompts.push(args[args.indexOf("-p") + 1]); return base(args); };
+    await s.send("primeiro");
+    s.handoff([apiTurn("corrige o bug", "corrigi em a.ts")], "qwen");
+    assert.equal(s.allTurns.length, 2);
+    assert.deepEqual(historyForFallback(s.allTurns).flatMap((m) => (typeof m.content === "string" ? [] : m.content.flatMap((b: any) => (b.type === "tool_use" ? [b.name] : [])))), ["edit_file"]);
+    await s.send("e agora?");
+    assert.match(prompts[1], /^\[Contexto:[\s\S]*corrigi em a\.ts[\s\S]*Pedido atual:\]\n\ne agora\?$/);
+    assert.equal(s.allTurns.at(-1)!.messages[0].content, "e agora?"); // o registro guarda só o pedido
+    await s.send("de novo");
+    assert.equal(prompts[2], "de novo");
   } finally { sb.cleanup(); }
 });

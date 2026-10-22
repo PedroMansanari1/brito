@@ -9,7 +9,7 @@ import "../tools/graph.js";
 import "../tools/delegate.js";
 import "../tools/plan.js";
 import "../tools/skills.js";
-import { Agent } from "../agent/loop.js";
+import { Agent, type TurnRecord } from "../agent/loop.js";
 import { ClaudeSession, hasClaudeCli, historyForFallback } from "../agent/claude-cli.js";
 import { startApprovalServer } from "../agent/approval.js";
 import { loadProjectAgents } from "../agent/agents.js";
@@ -79,7 +79,7 @@ interface ApiEngineOpts {
   effort?: string;
   loadedSkills?: Set<string>;
   /** motor claude CLI de onde veio a troca: `config` com um Claude volta para ele */
-  back?: { engine: Engine; costUsd: () => number };
+  back?: { engine: Engine; costUsd: () => number; handoff: (turns: TurnRecord[], label: string) => void };
 }
 
 export async function serveDesktop(root: string, resumeId?: string): Promise<void> {
@@ -143,7 +143,8 @@ export async function serveDesktop(root: string, resumeId?: string): Promise<voi
             engine.setModel(m);
             chooseModel(fallback, engine.model);
             graph.close().catch(() => {});
-            sink.warn("de volta ao claude CLI: a conversa do claude não inclui o que foi feito no qwen");
+            o.back.handoff(agent.unsentTurns.splice(0), agent.model);
+            sink.info("de volta ao claude CLI: o que foi feito no qwen segue no próximo pedido");
           } else if (m) sink.warn(`o ${m} precisa de ANTHROPIC_API_KEY (ou do claude CLI); seguindo no ${agent.model}`);
           return;
         }
@@ -157,7 +158,7 @@ export async function serveDesktop(root: string, resumeId?: string): Promise<voi
         try { await agent.send(text, ac.signal); } catch (e: any) { ok = false; ac.signal.aborted ? sink.warn("⏹ interrompido") : sink.error(e?.message ?? String(e)); } finally { sink.turnEnd(ok); ac = null; }
       },
       abort: () => ac?.abort(),
-      reset: () => { agent.messages = []; agent.contextTokens = 0; agent.recentTurns = []; agent.lastTurn = null; },
+      reset: () => { agent.messages = []; agent.contextTokens = 0; agent.recentTurns = []; agent.unsentTurns = []; agent.lastTurn = null; },
       stats: () => ({ usage: agent.usage, contextTokens: agent.contextTokens, contextWindow: contextWindowFor(agent.model), costUsd: o.back?.costUsd() ?? 0 }),
       close: async () => { await graph.close(); },
     } as Engine;
@@ -211,7 +212,7 @@ export async function serveDesktop(root: string, resumeId?: string): Promise<voi
         try {
           api = await buildApiEngine(status.name, {
             fallback, engineLabel: () => "claude CLI · assinatura", messages: historyForFallback(session.allTurns),
-            effort: session.effort, loadedSkills: session.loadedSkills, back: { engine: claude, costUsd: () => session.costUsd },
+            effort: session.effort, loadedSkills: session.loadedSkills, back: { engine: claude, costUsd: () => session.costUsd, handoff: (turns, label) => session.handoff(turns, label) },
           });
         } catch (e: any) { sink.error(`não consegui abrir o ${status.label}: ${e?.message ?? e}`); return; }
         activateFallback(fallback, `${f.kind} (${f.message})`);

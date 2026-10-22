@@ -86,6 +86,29 @@ export function historyForFallback(turns: TurnRecord[]): Msg[] {
   return turnsToMessages(failed && failed.messages.length <= 1 ? turns.slice(0, -1) : turns);
 }
 
+const HANDOFF_BUDGET = 60_000;
+const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) + `… [+${s.length - n} caracteres]` : s);
+
+/**
+ * Turnos feitos no modo API → texto que abre o próximo prompt do claude CLI na volta. O claude retoma a própria sessão
+ * (--resume) e não viu nada disso; com o texto no prompt, ele fica gravado na sessão dele e vale para os turnos seguintes.
+ * Passando de `budget`, os turnos mais antigos saem primeiro.
+ */
+export function handoffNote(turns: TurnRecord[], label: string, budget = HANDOFF_BUDGET): string {
+  const rendered = turns.map((t) => t.messages.flatMap((m) => blocks(m.content).flatMap((b: any) => {
+    if (b.type === "text" && b.text) return [`${m.role === "user" ? "USUÁRIO" : "AGENTE"}: ${clip(b.text, 4_000)}`];
+    if (b.type === "tool_use") return [`→ ${b.name}(${clip(JSON.stringify(b.input), 600)})`];
+    if (b.type === "tool_result") return [`← ${b.is_error ? "[ERRO] " : ""}${clip(resultText(b.content), b.is_error ? 1_500 : 1_000)}`];
+    return [];
+  })).join("\n")).filter(Boolean);
+  if (!rendered.length) return "";
+  let total = rendered.reduce((n, t) => n + t.length + 2, 0), dropped = 0;
+  while (rendered.length > 1 && total > budget) { total -= rendered.shift()!.length + 2; dropped++; }
+  return `[Contexto: enquanto você esteve fora, a conversa seguiu no ${label} (modo API do Brito). É isto que aconteceu lá, em ordem; ` +
+    `as edições e comandos já estão no disco. Continue a partir daqui.${dropped ? ` (${dropped} turno(s) mais antigo(s) omitido(s))` : ""}]\n\n` +
+    `${rendered.join("\n\n")}\n\n[Fim do contexto. Pedido atual:]\n\n`;
+}
+
 /** Agentes do Brito viram subagentes do claude (--agents), no lugar do `delegate`. */
 function claudeAgents(): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -183,7 +206,18 @@ export class ClaudeSession {
   get sessionId() { return this.id; }
   /** Retoma uma conversa do claude (--resume) em vez de começar outra. */
   resume(id: string) { this.id = id; this.started = true; }
-  reset() { this.id = randomUUID(); this.started = false; this.contextTokens = 0; this.recentTurns = []; this.allTurns = []; }
+  reset() { this.id = randomUUID(); this.started = false; this.contextTokens = 0; this.recentTurns = []; this.allTurns = []; this.pendingHandoff = ""; }
+  /** contexto do modo API ainda não entregue ao claude: abre o próximo prompt (`handoffNote`) */
+  private pendingHandoff = "";
+  /**
+   * Volta do modo API: os turnos feitos lá chegam ao claude no próximo prompt e entram em `allTurns`, para que uma
+   * nova queda para o qwen herde também o que foi feito nele.
+   */
+  handoff(turns: TurnRecord[], label: string) {
+    if (!turns.length) return;
+    this.pendingHandoff += handoffNote(turns, label);
+    this.allTurns.push(...turns);
+  }
   abort() { if (!this.child) return; this.aborted = true; this.child.kill("SIGINT"); }
   /** No Windows `kill("SIGINT")` termina o processo sem sinal nem código 130: lembramos que fomos nós que interrompemos. */
   private aborted = false;
@@ -226,7 +260,7 @@ export class ClaudeSession {
       for (const i of tooBig) ui.warn(`${i.name} passa de 5 MB e não foi anexada`);
       if (imgs.length) ui.info(`🖼 ${imgs.map((i) => `${i.name} (${fmtBytes(i.bytes)})`).join(", ")} anexada${imgs.length > 1 ? "s" : ""}`);
       // O claude vê a imagem pela tool Read: o prompt diz quais arquivos são imagens anexadas pelo usuário.
-      const prompt = imgs.length ? `${text}\n\n[O usuário anexou ${imgs.length > 1 ? "estas imagens" : "esta imagem"}; abra com a tool Read para vê-${imgs.length > 1 ? "las" : "la"}:\n${imgs.map((i) => `- ${i.path}`).join("\n")}]` : text;
+      const prompt = this.pendingHandoff + (imgs.length ? `${text}\n\n[O usuário anexou ${imgs.length > 1 ? "estas imagens" : "esta imagem"}; abra com a tool Read para vê-${imgs.length > 1 ? "las" : "la"}:\n${imgs.map((i) => `- ${i.path}`).join("\n")}]` : text);
       const cmd = (this.o.command ?? claudeCommand)(this.args(prompt, [...new Set(imgs.map((i) => path.dirname(i.path)))]));
       const child = (this.child = spawn(cmd.command, cmd.args, {
         cwd: this.o.root, stdio: ["ignore", "pipe", "pipe"],
@@ -266,6 +300,7 @@ export class ClaudeSession {
           // Houve turno (mesmo com erro, ex.: limite da assinatura): o claude já gravou a sessão com este id, e o
           // próximo turno precisa de --resume — repetir --session-id dá "Session ID … is already in use".
           this.started = true;
+          this.pendingHandoff = ""; // o prompt com o contexto já está gravado na sessão do claude
           this.usage.input += (ev.usage?.input_tokens ?? 0) + (ev.usage?.cache_read_input_tokens ?? 0) + (ev.usage?.cache_creation_input_tokens ?? 0);
           this.usage.output += ev.usage?.output_tokens ?? 0;
           this.usage.cacheRead += ev.usage?.cache_read_input_tokens ?? 0;
@@ -293,7 +328,7 @@ export class ClaudeSession {
         interrupted = signal === "SIGINT" || code === 130 || this.aborted;
         this.aborted = false;
         if (code !== 0 && !interrupted) { ok = false; if (stderr.trim()) ui.error(stderr.trim().slice(0, 600)); }
-        else if (code === 0) this.started = true;
+        else if (code === 0) { this.started = true; this.pendingHandoff = ""; }
         turn.finished = ok && !interrupted && code === 0;
         if (!ok && !interrupted) {
           Object.assign(failure, { stderr, code });
